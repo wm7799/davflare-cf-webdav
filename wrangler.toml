@@ -1,6 +1,6 @@
 name = "davflare-cf-webdav"
 pages_build_output_dir = "build"
-compatibility_date = "2024-06-20"
+compatibility_date = "2024-09-20"
 
 [vars]
 WEBDAV_PUBLIC_READ = "0"
