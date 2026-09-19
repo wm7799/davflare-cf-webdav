@@ -19,23 +19,16 @@ cp .dev.vars.example .dev.vars   # 或手动创建，见下
 npx wrangler pages dev build
 ```
 
-### `.dev.vars`（本包刻意未包含，含本地凭据）
+### 用户名 / 密码
 
-在项目根目录复制示例后填入自己的值：
-
-```
-cp .dev.vars.example .dev.vars
-```
-
-`.dev.vars.example` 内容（把占位符换成你自己的用户名和密码）：
+在 `wrangler.toml` 的 `[vars]` 里改成自己的值：
 
 ```
-WEBDAV_USERNAME=your-username
-WEBDAV_PASSWORD=your-password
-SITES_HOST=sites.local.test
+WEBDAV_USERNAME = "your-username"
+WEBDAV_PASSWORD = "your-password"
 ```
 
-生产环境在 Cloudflare Pages 控制台设置同名环境变量。
+本地开发也可复制 `.dev.vars.example` 为 `.dev.vars`（已 gitignore），会覆盖 toml 里的同名变量。Pages 控制台环境变量同样可以覆盖。
 
 ### 部署
 
