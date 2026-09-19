@@ -1,14 +1,14 @@
-name = "davflare-cf-webdav" = "davflare-cf-webdav"
-pages_build_output_dir = "build000" = "build"
-兼容日期 = "2024-09-19" = "2024-09-19"
+name = "davflare-cf-webdav"
+pages_build_output_dir = "build"
+兼容日期 = "2024-09-19" 
 
 [变量]
-WEBDAV_PUBLIC_READ = "0" = "0"
+WEBDAV_PUBLIC_READ = "0"
 
 # SITES_HOST 已在控制面板中设置为 Cloudflare Pages 环境变量
 # (生产/预览)，此处未硬编码，因此部署无法覆盖它。
 # 空/缺失 SITES_HOST = 静态站点保持关闭。
 
 [[r2_buckets]]
-binding = "BUCKET" = "BUCKET"
-bucket_name = "cf-webdav-000" = "cf-webdav-000"
+binding = "BUCKET"
+bucket_name = "cf-webdav-000"
