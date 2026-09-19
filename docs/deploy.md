@@ -35,7 +35,7 @@ Official guide: [Pages Git integration](https://developers.cloudflare.com/pages/
 ## After the first deploy
 
 1. Bind your R2 bucket to the `BUCKET` variable
-2. Set `WEBDAV_USERNAME` and `WEBDAV_PASSWORD` in `wrangler.toml` `[vars]`, or override them in the Pages dashboard
+2. Add `WEBDAV_USERNAME` and `WEBDAV_PASSWORD` as **Secret** (encrypted), not Text. Dashboard: Settings → Variables and Secrets → Add → Type **Secret**. If they already exist as Text, delete them first. CLI: `npx wrangler pages secret put WEBDAV_USERNAME --project-name davflare-cf-webdav` (same for `WEBDAV_PASSWORD`). Do not put them in `wrangler.toml` `[vars]` — that always creates plaintext Text.
 3. Optional: `WEBDAV_PUBLIC_READ=1` for public read; `TRASH_RETENTION_DAYS` (default `30`, `-1` disables purge)
 4. Optional static sites: bind `sites.<your-domain>` to this same Pages project and set `SITES_HOST=sites.<your-domain>`
 5. Retry deploy so the binding and env vars apply

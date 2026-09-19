@@ -19,16 +19,24 @@ cp .dev.vars.example .dev.vars   # 或手动创建，见下
 npx wrangler pages dev build
 ```
 
-### 用户名 / 密码
+### 用户名 / 密码（必须用密钥 Secret）
 
-在 `wrangler.toml` 的 `[vars]` 里改成自己的值：
+`wrangler.toml` 的 `[vars]` 在 Cloudflare 后台只会识别成明文 Text。账号密码要加为 **Secret**：
+
+1. Workers & Pages → 项目 → Settings → Variables and Secrets → Add
+2. Type 选 **Secret**（不要选 Text）
+3. 分别添加 `WEBDAV_USERNAME`、`WEBDAV_PASSWORD`
+4. 如果这两个名字已经是 Text，先删除再按 Secret 重新添加
+5. 保存后重新部署
+
+CLI 等价：
 
 ```
-WEBDAV_USERNAME = "your-username"
-WEBDAV_PASSWORD = "your-password"
+npx wrangler pages secret put WEBDAV_USERNAME --project-name davflare-cf-webdav
+npx wrangler pages secret put WEBDAV_PASSWORD --project-name davflare-cf-webdav
 ```
 
-本地开发也可复制 `.dev.vars.example` 为 `.dev.vars`（已 gitignore），会覆盖 toml 里的同名变量。Pages 控制台环境变量同样可以覆盖。
+本地开发复制 `.dev.vars.example` 为 `.dev.vars`（已 gitignore）。
 
 ### 部署
 

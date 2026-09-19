@@ -4,9 +4,15 @@ compatibility_date = "2024-06-20"
 
 [vars]
 WEBDAV_PUBLIC_READ = "0"
-# Change these to your own values before deploy.
-WEBDAV_USERNAME = ""
-WEBDAV_PASSWORD = ""
+
+# WEBDAV_USERNAME / WEBDAV_PASSWORD must be Cloudflare Secrets (encrypted),
+# not [vars]. [vars] always shows up as plaintext Text in the dashboard.
+# Production: Workers & Pages → this project → Settings → Variables and Secrets
+#   → Add → Type: Secret → names WEBDAV_USERNAME and WEBDAV_PASSWORD.
+# CLI: npx wrangler pages secret put WEBDAV_USERNAME --project-name davflare-cf-webdav
+#      npx wrangler pages secret put WEBDAV_PASSWORD --project-name davflare-cf-webdav
+# Local: copy .dev.vars.example to .dev.vars
+# If these names already exist as Text, delete them first, then re-add as Secret.
 
 # SITES_HOST is set as a Cloudflare Pages environment variable in the dashboard
 # (production/preview), NOT hard-coded here, so a deploy cannot override it.

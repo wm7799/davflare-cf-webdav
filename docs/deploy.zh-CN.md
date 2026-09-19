@@ -35,7 +35,7 @@ Cloudflare **没有**与 Workers「一键 Deploy」对等的官方 Pages 按钮�
 ## 首次部署之后
 
 1. 将 R2 bucket 绑定到 `BUCKET` 变量
-2. 在 `wrangler.toml` 的 `[vars]` 里设置 `WEBDAV_USERNAME` 和 `WEBDAV_PASSWORD`（也可在 Pages 控制台覆盖）
+2. 把 `WEBDAV_USERNAME` 和 `WEBDAV_PASSWORD` 加为 **Secret（密钥）**，不要选 Text。路径：Settings → Variables and Secrets → Add → 类型选 **Secret**。如果已经是 Text，先删掉再按 Secret 重新加。CLI：`npx wrangler pages secret put WEBDAV_USERNAME --project-name davflare-cf-webdav`（密码同理）。不要写进 `wrangler.toml` 的 `[vars]`，那样后台一定是明文 Text。
 3. 可选：`WEBDAV_PUBLIC_READ=1` 开启公开读取；`TRASH_RETENTION_DAYS`（默认 `30`，`-1` 关闭清理）
 4. 可选静态站点：把 `sites.<你的域>` 绑到同一个 Pages 项目，并设置 `SITES_HOST=sites.<你的域>`
 5. 重新部署，使绑定和环境变量生效
