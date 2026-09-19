@@ -1,0 +1,3 @@
+WEBDAV_USERNAME=your-username
+WEBDAV_PASSWORD=your-password
+SITES_HOST=sites.local.test

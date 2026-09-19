@@ -21,13 +21,21 @@ npx wrangler pages dev build
 
 ### `.dev.vars`（本包刻意未包含，含本地凭据）
 
-在项目根目录新建：
+在项目根目录复制示例后填入自己的值：
 
 ```
-WEBDAV_USERNAME=admin
-WEBDAV_PASSWORD=admin
+cp .dev.vars.example .dev.vars
+```
+
+`.dev.vars.example` 内容（把占位符换成你自己的用户名和密码）：
+
+```
+WEBDAV_USERNAME=your-username
+WEBDAV_PASSWORD=your-password
 SITES_HOST=sites.local.test
 ```
+
+生产环境在 Cloudflare Pages 控制台设置同名环境变量。
 
 ### 部署
 

@@ -364,8 +364,8 @@
 npm install
 
 # 根目录创建 .dev.vars（已被 .gitignore 忽略，本地凭证不入库）
-echo 'WEBDAV_USERNAME=admin' >> .dev.vars
-echo 'WEBDAV_PASSWORD=你的密码' >> .dev.vars
+cp .dev.vars.example .dev.vars
+# 编辑 .dev.vars，把 your-username / your-password 换成自己的值
 
 npm run build                      # Vite 构建到 build/（先 tsc --noEmit 类型检查）
 npx wrangler pages dev build       # http://localhost:8788，前端 + functions + 本地模拟 R2
