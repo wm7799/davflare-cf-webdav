@@ -1,0 +1,15 @@
+name = "davflare-cf-webdav"
+pages_build_output_dir = "build"
+compatibility_date = "2024-06-20"
+
+[vars]
+WEBDAV_PUBLIC_READ = "0"
+WEBDAV_USERNAME = "admin"
+WEBDAV_PASSWORD = "admin"
+# SITES_HOST is set as a Cloudflare Pages environment variable in the dashboard
+# (production/preview), NOT hard-coded here, so a deploy cannot override it.
+# Empty/missing SITES_HOST = static sites stay off.
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "cf-webdav"

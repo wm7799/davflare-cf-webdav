@@ -1,0 +1,758 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { alpha, useTheme } from "@mui/material/styles";
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Tooltip,
+  Typography,
+  useMediaQuery,
+} from "@mui/material";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteIcon from "@mui/icons-material/Delete";
+import RotateRightIcon from "@mui/icons-material/RotateRight";
+import DownloadIcon from "@mui/icons-material/Download";
+import EditIcon from "@mui/icons-material/Edit";
+import ShareIcon from "@mui/icons-material/Share";
+
+import { authFetch } from "./app/auth";
+import {
+  HighlightLang,
+  highlightLangFor,
+  LineToken,
+  tokenizeForHighlight,
+  tokensToLines,
+} from "./app/highlight";
+import { NotifyFn } from "./app/notify";
+import {
+  fileExtension,
+  fileIconKind,
+  isJsonFile,
+  isMediaPreviewable,
+  isTextPreviewable,
+  mimeType,
+  prettyJsonOrRaw,
+  readResponseTextCapped,
+  TEXT_PREVIEW_MAX_BYTES,
+} from "./app/preview";
+import { strings, translate } from "./app/strings";
+import { MOTION, Z_INDEX, warmShadow } from "./app/theme";
+import { FileItem } from "./app/types";
+import { downloadFile } from "./app/transfer";
+import { encodeKey, errorMessage, humanReadableSize } from "./app/utils";
+
+const LINE_NUMBER_CAP = 2000;
+const HIGHLIGHT_MAX_BYTES = 1024 * 1024;
+
+// 亮暗两套 token 配色（对 surface.code 背景均满足可读性）
+const TOKEN_COLORS = {
+  light: {
+    keyword: "#a626a4",
+    string: "#50a14f",
+    comment: "#9d9d99",
+    number: "#986801",
+  },
+  dark: {
+    keyword: "#c678dd",
+    string: "#98c379",
+    comment: "#7f848e",
+    number: "#d19a66",
+  },
+} as const;
+
+function TextPane({
+  text,
+  highlightLang,
+}: {
+  text: string;
+  highlightLang: HighlightLang | null;
+}) {
+  const theme = useTheme();
+  const mode = theme.palette.mode;
+  const enabled =
+    highlightLang !== null && text.length <= HIGHLIGHT_MAX_BYTES;
+
+  const lines = useMemo(() => {
+    if (!enabled) return null;
+    try {
+      return tokensToLines(text, tokenizeForHighlight(text, highlightLang));
+    } catch {
+      return null;
+    }
+  }, [enabled, highlightLang, text]);
+
+  const plainLines = useMemo(() => text.split("\n"), [text]);
+  const showGutter = plainLines.length <= LINE_NUMBER_CAP;
+  const tokenColor = (kind: LineToken["kind"]) =>
+    kind === "plain" ? undefined : TOKEN_COLORS[mode][kind];
+
+  const renderLine = (line: LineToken[], index: number) =>
+    line.length === 0 ? (
+      <div key={index}>{"\u00a0"}</div>
+    ) : (
+      <div key={index}>
+        {line.map((token, tokenIndex) =>
+          token.kind === "plain" ? (
+            <React.Fragment key={tokenIndex}>{token.text}</React.Fragment>
+          ) : (
+            <span key={tokenIndex} style={{ color: tokenColor(token.kind) }}>
+              {token.text}
+            </span>
+          )
+        )}
+      </div>
+    );
+
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flex: 1,
+        minHeight: 0,
+        overflow: "auto",
+        backgroundColor: "surface.code",
+        borderTop: "1px solid",
+        borderBottom: "1px solid",
+        borderColor: "divider",
+        fontFamily:
+          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+        fontSize: 13,
+        lineHeight: 1.65,
+        color: "surface.codeText",
+        tabSize: 2,
+      }}
+    >
+      {showGutter && (
+        <Box
+          aria-hidden
+          sx={{
+            flexShrink: 0,
+            userSelect: "none",
+            textAlign: "right",
+            px: 1.5,
+            py: 1.5,
+            color: "text.secondary",
+            borderRight: "1px solid",
+            borderColor: "divider",
+            minWidth: 48,
+            backgroundColor: "surface.codeGutter",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {plainLines.map((_, index) => (
+            <div key={index}>{index + 1}</div>
+          ))}
+        </Box>
+      )}
+      <Box
+        component="pre"
+        sx={{
+          flex: 1,
+          m: 0,
+          px: 2,
+          py: 1.5,
+          textAlign: "left",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "normal",
+          wordBreak: "normal",
+        }}
+      >
+        {lines
+          ? lines.map(renderLine)
+          : plainLines.map((line, index) => (
+              <div key={index}>{line || "\u00a0"}</div>
+            ))}
+      </Box>
+    </Box>
+  );
+}
+
+function PreviewDialog({
+  file,
+  siblings = [],
+  onSibling,
+  onClose,
+  onNotify,
+  onShare,
+  onRename,
+  onDelete,
+}: {
+  file: FileItem | null;
+  siblings?: FileItem[];
+  onSibling?: (file: FileItem) => void;
+  onClose: () => void;
+  onNotify: NotifyFn;
+  onShare: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const isPhone = useMediaQuery("(max-width:600px)");
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  // 旋转 90°/270° 后视觉包围盒与布局盒互换，用补偿系数防止溢出容器
+  const [rotFit, setRotFit] = useState(1);
+  const [rotation, setRotation] = useState(0);
+  const [rate, setRate] = useState(1);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
+    null
+  );
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mode = useTheme().palette.mode;
+  const [text, setText] = useState<string | null>(null);
+  const [tooLarge, setTooLarge] = useState(false);
+  const [largeSize, setLargeSize] = useState(0);
+  const [jsonError, setJsonError] = useState(false);
+
+  const index = file
+    ? siblings.findIndex((item) => item.key === file.key)
+    : -1;
+  const hasPrev = Boolean(onSibling) && index > 0;
+  const hasNext =
+    Boolean(onSibling) && index >= 0 && index < siblings.length - 1;
+  const showPager = siblings.length > 1 && Boolean(onSibling);
+
+  const goSibling = (delta: number) => {
+    if (!onSibling || index < 0) return;
+    const next = index + delta;
+    if (next < 0 || next >= siblings.length) return;
+    onSibling(siblings[next]);
+  };
+
+  useEffect(() => {
+    if (!file) {
+      setUrl(null);
+      setText(null);
+      setZoom(1);
+      setOffset({ x: 0, y: 0 });
+      setTooLarge(false);
+      setLargeSize(0);
+      setJsonError(false);
+      setRotation(0);
+      setRate(1);
+      return;
+    }
+    let objectUrl: string | null = null;
+    let canceled = false;
+    const controller = new AbortController();
+    setLoading(true);
+    setUrl(null);
+    setText(null);
+    setTooLarge(false);
+    setLargeSize(0);
+    setJsonError(false);
+    setZoom(1);
+    setOffset({ x: 0, y: 0 });
+    setRotation(0);
+    setRate(1);
+
+    const media = isMediaPreviewable(file);
+    const asText = !media && isTextPreviewable(file);
+    const listedSize = file.size || 0;
+    const run = async () => {
+      try {
+        if (asText && listedSize > TEXT_PREVIEW_MAX_BYTES) {
+          if (!canceled) {
+            setTooLarge(true);
+            setLargeSize(listedSize);
+          }
+          return;
+        }
+        const response = await authFetch("/webdav/" + encodeKey(file.key), {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(translate("openFileFailed"));
+        if (asText) {
+          const result = await readResponseTextCapped(response);
+          if (canceled) return;
+          if (!result.ok) {
+            setTooLarge(true);
+            setLargeSize(result.size);
+            return;
+          }
+          if (isJsonFile(file)) {
+            const pretty = prettyJsonOrRaw(result.text);
+            setText(pretty.text);
+            setJsonError(pretty.parseError);
+          } else {
+            setText(result.text);
+          }
+          return;
+        }
+        const blob = await response.blob();
+        if (canceled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      } catch (error) {
+        if (canceled || (error as Error).name === "AbortError") return;
+        onNotify(errorMessage(error), "error");
+      } finally {
+        if (!canceled) setLoading(false);
+      }
+    };
+    run();
+    return () => {
+      canceled = true;
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file]);
+
+  useEffect(() => {
+    if (!file || !showPager) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      goSibling(event.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [file, showPager, index, siblings, onSibling]);
+
+  const download = async () => {
+    if (!file) return;
+    try {
+      if (text != null && !isJsonFile(file)) {
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(href), 60_000);
+        return;
+      }
+      if (url) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      await downloadFile(file.key);
+    } catch (error) {
+      onNotify(errorMessage(error), "error");
+    }
+  };
+
+  const copyAll = async () => {
+    if (text == null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      onNotify(translate("copiedAllToast"), "success");
+    } catch {
+      onNotify(translate("copyFailed2"), "error");
+    }
+  };
+
+  const closePreview = () => {
+    onClose();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+  };
+
+  const contentType = mimeType(file?.contentType);
+  // 代码类文件启用轻量语法高亮（json/clike/hash 注释族）
+  const highlightLang = useMemo<HighlightLang | null>(() => {
+    if (!file) return null;
+    const kind = fileIconKind(file);
+    if (kind === "json") return "json";
+    if (kind === "js" || kind === "css" || kind === "code" || kind === "shell") {
+      return highlightLangFor(fileExtension(file.name));
+    }
+    return null;
+  }, [file]);
+  const isImage =
+    contentType.startsWith("image/") && contentType !== "image/svg+xml";
+  const isVideo = contentType.startsWith("video/");
+  const isAudio = contentType.startsWith("audio/");
+  const isPdf = contentType === "application/pdf";
+  const showText =
+    Boolean(file) &&
+    !isImage &&
+    !isVideo &&
+    !isAudio &&
+    !isPdf &&
+    (tooLarge || text != null || (file ? isTextPreviewable(file) : false));
+
+  // —— 图片缩放/平移/旋转 ——
+  const measureRotFit = React.useCallback(() => {
+    const stage = stageRef.current;
+    const img = imgRef.current;
+    if (!stage || !img) return;
+    const rect = stage.getBoundingClientRect();
+    const layoutW = img.clientWidth;
+    const layoutH = img.clientHeight;
+    if (!rect.width || !rect.height || !layoutW || !layoutH) {
+      setRotFit(1);
+      return;
+    }
+    if (rotation % 180 === 0) {
+      setRotFit(1);
+      return;
+    }
+    // 旋转后视觉包围盒宽高互换，按容器收敛
+    const k = Math.min(1, rect.width / layoutH, rect.height / layoutW);
+    setRotFit(Number.isFinite(k) && k > 0 ? Math.max(k, 0.05) : 1);
+  }, [rotation]);
+
+  React.useLayoutEffect(() => {
+    measureRotFit();
+  }, [measureRotFit, url]);
+
+  // 容器尺寸变化（窗口/对话框）时重算旋转补偿
+  React.useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => measureRotFit());
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [measureRotFit]);
+
+  // 滚轮缩放需要非被动监听才能 preventDefault（阻止页面滚动）
+  React.useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || !url || !isImage) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+      setZoom((z) => Math.min(4, Math.max(0.25, z * factor)));
+    };
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, [url, isImage]);
+
+  const onImagePointerDown = (event: React.PointerEvent<HTMLImageElement>) => {
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      ox: offset.x,
+      oy: offset.y,
+    };
+    setDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onImagePointerMove = (event: React.PointerEvent<HTMLImageElement>) => {
+    const start = dragRef.current;
+    if (!start) return;
+    setOffset({
+      x: start.ox + (event.clientX - start.x),
+      y: start.oy + (event.clientY - start.y),
+    });
+  };
+  const onImagePointerEnd = (event: React.PointerEvent<HTMLImageElement>) => {
+    dragRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+  const onImageDoubleClick = () => {
+    setZoom((z) => (z > 1.01 ? 1 : 2.5));
+    setOffset({ x: 0, y: 0 });
+  };
+
+  const pagerButton = (side: "left" | "right") => {
+    const prev = side === "left";
+    const enabled = prev ? hasPrev : hasNext;
+    if (!showPager) return null;
+    return (
+      <IconButton
+        aria-label={prev ? strings.prevFile : strings.nextFile}
+        disabled={!enabled}
+        onClick={() => goSibling(prev ? -1 : 1)}
+        sx={{
+          position: "absolute",
+          top: "50%",
+          [side]: 8,
+          transform: "translateY(-50%)",
+          zIndex: Z_INDEX.previewPager,
+          backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.88),
+          boxShadow: (theme) =>
+            warmShadow(theme.palette.mode === "dark", "0 2px 8px", 0.12),
+          "&:hover": { backgroundColor: "background.paper" },
+          "&.Mui-disabled": { opacity: 0.3 },
+        }}
+      >
+        {prev ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+      </IconButton>
+    );
+  };
+
+  return (
+    <Dialog
+      open={Boolean(file)}
+      onClose={closePreview}
+      fullWidth
+      fullScreen={isPhone}
+      maxWidth="xl"
+      transitionDuration={MOTION.base}
+      disableRestoreFocus
+      PaperProps={{
+        sx: {
+          display: "flex",
+          flexDirection: "column",
+          height: isPhone ? "100%" : "92vh",
+          maxHeight: isPhone ? "100%" : "92vh",
+          width: isPhone ? "100%" : "96vw",
+          maxWidth: isPhone ? "100%" : 1280,
+          opacity: 1,
+        },
+      }}
+      BackdropProps={{ transitionDuration: MOTION.fast }}
+    >
+      <DialogTitle
+        sx={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          pr: 2,
+          fontWeight: 700,
+          pb: 1,
+        }}
+      >
+        {file?.name}
+        {file && !file.isDir && (
+          <Typography
+            component="span"
+            variant="caption"
+            color="text.secondary"
+            sx={{ ml: 1.5, fontWeight: 500 }}
+          >
+            {humanReadableSize(file.size)}
+            {showPager && index >= 0
+              ? ` · ${index + 1}/${siblings.length}`
+              : ""}
+          </Typography>
+        )}
+      </DialogTitle>
+      <DialogContent
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          textAlign: showText ? "left" : "center",
+          px: showText ? 0 : 2,
+          py: showText ? 0 : 2,
+          flex: 1,
+          position: "relative",
+        }}
+      >
+        {pagerButton("left")}
+        {pagerButton("right")}
+        {loading ? (
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              flex: 1,
+              padding: 4,
+            }}
+          >
+            <CircularProgress />
+          </Box>
+        ) : tooLarge ? (
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: 1,
+              padding: 4,
+              gap: 1.5,
+            }}
+          >
+            <Typography variant="h6">{strings.previewTooLargeTitle}</Typography>
+            <Typography color="text.secondary">
+              {translate("previewTooLargeHint", {
+                size: humanReadableSize(largeSize || file?.size || 0),
+              })}
+            </Typography>
+            <Button
+              startIcon={<DownloadIcon />}
+              onClick={download}
+              variant="contained"
+            >
+              {strings.download}
+            </Button>
+          </Box>
+        ) : text != null ? (
+          <Box sx={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+            {jsonError && (
+              <Alert severity="warning" sx={{ borderRadius: 0 }}>
+                {strings.jsonParseFailed}
+              </Alert>
+            )}
+            <TextPane text={text} highlightLang={highlightLang} />
+          </Box>
+        ) : url ? (
+          isImage ? (
+            <Box
+              ref={stageRef}
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                borderRadius: 1,
+                // 透明 PNG 的棋盘格衬底（暗色用深色格）
+                backgroundImage:
+                  mode === "dark"
+                    ? "conic-gradient(rgba(255,255,255,0.08) 25%, transparent 0 50%, rgba(255,255,255,0.08) 0 75%, transparent 0)"
+                    : "conic-gradient(rgba(28, 22, 16, 0.08) 25%, transparent 0 50%, rgba(28, 22, 16, 0.08) 0 75%, transparent 0)",
+                backgroundSize: "16px 16px",
+              }}
+            >
+              <img
+                ref={imgRef}
+                src={url}
+                alt={file?.name}
+                draggable={false}
+                onLoad={measureRotFit}
+                onDoubleClick={onImageDoubleClick}
+                onPointerDown={onImagePointerDown}
+                onPointerMove={onImagePointerMove}
+                onPointerUp={onImagePointerEnd}
+                onPointerCancel={onImagePointerEnd}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  cursor: dragging
+                    ? "grabbing"
+                    : zoom > 1.01
+                    ? "grab"
+                    : "zoom-in",
+                  userSelect: "none",
+                  touchAction: "none",
+                  transform: `translate(${offset.x}px, ${offset.y}px) rotate(${rotation}deg) scale(${(zoom * rotFit).toFixed(4)})`,
+                  transition: dragging
+                    ? "none"
+                    : "transform 0.15s ease-out",
+                }}
+              />
+            </Box>
+          ) : isVideo ? (
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, width: "100%" }}>
+              <video
+                ref={videoRef}
+                src={url}
+                controls
+                style={{ maxWidth: "100%", maxHeight: "100%" }}
+              />
+              <Tooltip title={strings.playbackSpeed}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const rates = [1, 1.5, 2, 0.5];
+                    const next = rates[(rates.indexOf(rate) + 1) % rates.length];
+                    setRate(next);
+                    if (videoRef.current) videoRef.current.playbackRate = next;
+                  }}
+                >
+                  {rate}x
+                </Button>
+              </Tooltip>
+            </Box>
+          ) : isAudio ? (
+            <audio src={url} controls style={{ width: "100%" }} />
+          ) : isPdf ? (
+            <iframe
+              src={url}
+              title={file?.name}
+              style={{ width: "100%", height: "100%", border: "none" }}
+            />
+          ) : (
+            <Typography>{strings.unsupportedPreview}</Typography>
+          )
+        ) : null}
+      </DialogContent>
+      <DialogActions sx={{ flexWrap: "wrap", gap: 0.5, px: 2, py: 1.25 }}>
+        {showPager && (
+          <>
+            <Button disabled={!hasPrev} onClick={() => goSibling(-1)}>
+              {strings.prevFile}
+            </Button>
+            <Button disabled={!hasNext} onClick={() => goSibling(1)}>
+              {strings.nextFile}
+            </Button>
+          </>
+        )}
+        {url && isImage && (
+          <>
+            <Tooltip title={strings.rotate}>
+              <Button onClick={() => setRotation((prev) => (prev + 90) % 360)}>
+                <RotateRightIcon />
+              </Button>
+            </Tooltip>
+            {/* 当前显示比例，点击复位为 100% */}
+            <Button
+              size="small"
+              variant={zoom !== 1 || rotFit !== 1 ? "outlined" : "text"}
+              onClick={() => {
+                setZoom(1);
+                setOffset({ x: 0, y: 0 });
+              }}
+              sx={{ minWidth: 64, fontVariantNumeric: "tabular-nums" }}
+            >
+              {Math.round(zoom * rotFit * 100)}%
+            </Button>
+          </>
+        )}
+        {text != null && (
+          <Button startIcon={<ContentCopyIcon />} onClick={copyAll}>
+            {strings.copyAll}
+          </Button>
+        )}
+        <Button startIcon={<ShareIcon />} onClick={onShare}>
+          {strings.share}
+        </Button>
+        <Button startIcon={<EditIcon />} onClick={onRename}>
+          {strings.rename}
+        </Button>
+        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>
+          {strings.delete}
+        </Button>
+        <Button startIcon={<DownloadIcon />} onClick={download}>
+          {strings.download}
+        </Button>
+        <Button onClick={closePreview}>{strings.close}</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+export default PreviewDialog;

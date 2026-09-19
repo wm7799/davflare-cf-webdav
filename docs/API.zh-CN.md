@@ -1,0 +1,280 @@
+# Davflare 开放接口
+
+[English](API.md) | [中文](API.zh-CN.md)
+
+← [README](../README.zh-CN.md)
+
+在网页端创建密钥：资源管理栏「API」，或账号菜单「开放接口」。完整密钥只展示一次，服务端仅保存 SHA-256 哈希。鉴权方式为 `Authorization: Bearer <apiKey>` 或 `X-Api-Key: <apiKey>`（不走网页会话）。通过已登录会话调用 `GET` / `POST` / `DELETE` `/api/keys` 管理密钥。API 设置页也有使用说明。
+
+若 **API Key** 功能开关关闭，Bearer / `X-Api-Key` 调用返回 **401**。网页会话（Basic）接口不受影响。**MCP 依赖 API Key**：MCP 开关或 API Key 开关任一关闭时，`POST /mcp` 返回 **404**。
+
+拥有者功能开关存在 R2（`_$flaredrive$/config.json`）。`GET /api/config`（会话）返回 `username`、`publicRead`、`sitesHost` 以及 `webdav` / `mcp` / `apiKey` / `sites` / `imageHost`（默认全部 **true**）。`PATCH /api/config` 提交这些布尔字段，**仅允许 Basic 会话** —— 带 `Bearer` 或 `X-Api-Key` 返回 **403**。
+
+`GET /api/setup`（仅 Basic 会话）跑部署后检查清单（R2、WebDAV PROPFIND、功能开关、`SITES_HOST`、MCP `tools/list`），供 `#/setup` 使用。见 [deploy.zh-CN.md](./deploy.zh-CN.md)。
+
+内部 `_$flaredrive$/` 路径会被拒绝。单次操作覆盖超过 1000 个对象会返回 **400**，需要分批处理。
+
+### 上传
+
+默认 `POST /api/upload` 遇到重名会自动改名（`name (2).ext`）。加上 `?overwrite=1`（或 `true`）则按相同路径 + 文件名覆盖写入。
+
+```bash
+# multipart
+curl -X POST "https://<your-domain.com>/api/upload?path=folder/" \
+  -H "Authorization: Bearer <apiKey>" \
+  -F "file=@photo.jpg"
+
+# also accepts X-Api-Key, or a raw body with X-File-Name
+curl -X POST "https://<your-domain.com>/api/upload?path=docs/" \
+  -H "X-Api-Key: <apiKey>" \
+  -H "X-File-Name: notes.txt" \
+  --data-binary @notes.txt
+
+# overwrite upload
+curl -X POST "https://<your-domain.com>/api/upload?path=folder/&overwrite=1" \
+  -H "Authorization: Bearer <apiKey>" \
+  -F "file=@photo.jpg"
+```
+
+单次请求上传上限约 100 MB（超出返回 **HTTP 413**）。更大的文件请使用三步分片 API：
+
+```bash
+# 1) create
+curl -X POST "https://<your-domain.com>/api/upload?uploads&path=folder/big.bin" \
+  -H "Authorization: Bearer <apiKey>"
+# → 201 { key, uploadId }
+
+# 2) upload each part (≤100MB per request, partNumber 1..10000)
+curl -X PUT "https://<your-domain.com>/api/upload?path=folder/big.bin&uploadId=<id>&partNumber=1" \
+  -H "Authorization: Bearer <apiKey>" \
+  --data-binary @part1.bin
+# → 200 { partNumber, etag }
+
+# 3) complete with the collected parts (order matters)
+curl -X POST "https://<your-domain.com>/api/upload?path=folder/big.bin&uploadId=<id>" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"parts":[{"partNumber":1,"etag":"..."},{"partNumber":2,"etag":"..."}]}'
+
+# abort an unfinished upload
+curl -X DELETE "https://<your-domain.com>/api/upload?path=folder/big.bin&uploadId=<id>" \
+  -H "Authorization: Bearer <apiKey>"
+```
+
+### 列出、下载、创建目录
+
+同一把密钥可以列出文件夹并逐个下载文件。单文件仍用 `/api/download`。要把目录打成 zip **且不**创建公开分享链接，用已鉴权的 `/api/archive`（或 MCP `zip` 工具）。需要外链时目录分享照旧可用。
+
+```bash
+# Depth-1 list (empty path = root). Does not recurse.
+curl "https://<your-domain.com>/api/list?path=folder/" \
+  -H "Authorization: Bearer <apiKey>"
+
+# download each item where isDir is false
+curl -L "https://<your-domain.com>/api/download?path=folder/notes.txt" \
+  -H "Authorization: Bearer <apiKey>" \
+  -o notes.txt
+
+# also accepts X-Api-Key
+curl -L "https://<your-domain.com>/api/download?path=folder/notes.txt" \
+  -H "X-Api-Key: <apiKey>" \
+  -o notes.txt
+
+# 把目录（或单文件）打成 zip 流式下载；无公开分享链接
+curl -L "https://<your-domain.com>/api/archive?path=folder/" \
+  -H "Authorization: Bearer <apiKey>" \
+  -o folder.zip
+
+# 多选打包（与网页多选下载同一 body）；Basic 会话或 API Key
+curl -X POST "https://<your-domain.com>/api/archive" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"keys":["folder/a.txt","folder/sub/"]}' \
+  -o archive.zip
+```
+
+`GET /api/list` 只返回当前文件夹的 `{ items: [{ key, name, size, isDir, uploaded, etag }] }`。文件始终包含数值 `size`、ISO `uploaded`（以及别名 `updated`）和 R2 `etag`。前缀分隔出来的文件夹为 `isDir: true`、`size: 0`、`uploaded: null`（未知；不会伪造 mtime）。嵌套目录：再用该项的 `key` 调用一次 `/api/list`。若 `path` 指向文件，列表接口返回 **400** 并提示改用 `/api/download`。目录不存在：**404**。密钥无效或过期：**401**。大目录可加 `limit=1..1000`（以及上一页返回的 `cursor`）做分页 —— 还有下一页时响应会带 `nextCursor`。
+
+`GET /api/download` 的 `path` 是对象 key。**HTTP 200** 会流式返回文件（`Content-Type` 来自 R2，否则为 `application/octet-stream`，`Content-Disposition: attachment`）。`path` 缺失/为空，或指向目录/前缀文件夹，返回 **400**；对象不存在 **404**；密钥无效或过期 **401**。内部 `_$flaredrive$/` 路径会被拒绝。
+
+`GET /api/archive?path=` 把单个目录或文件打成 zip，鉴权与其它开放接口相同（Bearer / `X-Api-Key`，或网页 Basic 会话）。**HTTP 200** 流式返回 `application/zip`。目录键会剥掉文件夹前缀（与目录分享一致）。缺 path **400**；路径不存在 **404**；密钥无效或过期 **401**。内部 `_$flaredrive$/` 路径会被拒绝。`POST /api/archive` 传 `{ "keys": [...] }` 可多选打包（网页多选下载）；鉴权与内部路径规则相同。
+
+脚本创建文件夹（父目录会自动创建）：
+
+```bash
+# JSON body or ?path= both work. 201 created / 200 already exists / 409 same-name file
+curl -X POST "https://<your-domain.com>/api/mkdir" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"path":"folder/sub"}'
+```
+
+### 备份、重命名、删除
+
+```bash
+# conflict backup: rename remote to name.conflict-YYYYMMDDTHHMMSS.ext (UTC)
+curl -X POST "https://<your-domain.com>/api/backup?path=folder/notes.txt" \
+  -H "Authorization: Bearer <apiKey>"
+
+# rename (409 if `to` exists unless overwrite=1; directories move recursively, no overwrite)
+curl -X POST "https://<your-domain.com>/api/rename" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"from":"folder/old.txt","to":"folder/new.txt"}'
+
+# delete a file only
+curl -X DELETE "https://<your-domain.com>/api/delete?path=folder/notes.txt" \
+  -H "Authorization: Bearer <apiKey>"
+
+# soft delete (goes to the recycle bin, restorable; works for directories too)
+curl -X DELETE "https://<your-domain.com>/api/delete?path=folder/notes.txt&soft=1" \
+  -H "Authorization: Bearer <apiKey>"
+
+# delete a whole directory recursively (≤1000 objects per call)
+curl -X DELETE "https://<your-domain.com>/api/delete?path=folder/sub" \
+  -H "Authorization: Bearer <apiKey>"
+```
+
+`/api/rename` 和 `/api/delete` 也支持目录 —— 重命名会移动整棵子树，删除会递归移除（默认硬删除，除非带 `soft=1`）。对目录调用 `/api/backup` 会把整棵子树重命名为 `name.conflict-<UTCstamp>`。单次操作覆盖超过 1000 个对象会返回 **400**，需要分批处理。
+
+### 分享
+
+`POST /api/shares` 也接受文件夹 key —— 打开分享链接会把整棵子树以 zip 流式下载（提取码和过期时间照常生效）。分享管理（GET/POST/DELETE /api/shares）同时接受网页会话（Basic）和 API key。
+
+`GET /share/<token>`（无需鉴权）默认返回**服务端渲染、零脚本的落地页**（`prefers-color-scheme` 亮暗双套，语言跟随 `Accept-Language`）：文件名、类型、大小、分享时间，可预览类型还带在线预览（`<img>` / `<video>` / `<audio>` / `<iframe>`）；页面里的下载按钮指向 `?download=1`。同一 URL 上的查询参数：
+
+- `?download=1` —— 原始字节 + `Content-Disposition: attachment`。**以前直接从分享链接下载的脚本必须改用这个参数**（文件夹两种方式都是 zip 流）。
+- `?raw=1` —— 原始字节内联返回（`Content-Disposition: inline`），仅对可预览类型（图片/音视频/PDF/文本）；其他类型仍是附件下载。响应保留既有安全加固 —— `Content-Security-Policy: sandbox`、`X-Content-Type-Options: nosniff` —— 并支持 `Range`（视频拖动/断点续传）。
+
+提取码门禁不变，对落地页与两个参数同样生效：旧式 `?code=` 查询参数继续可用，表单 POST 成功后种下 Path 限定的 `HttpOnly` cookie，落地页上渲染的链接会继承 `?code=`，旧式链接的预览同样能过门禁。过期 → **410**，撤销/不存在 → **404**，提取码错误 → **403** 表单。
+
+### 复制、stat、搜索
+
+`POST /api/copy` 复制文件（to 已存在则 409，除非 overwrite=1；不支持目录）。`GET /api/stat?path=` 返回 kind / size / etag / uploaded / contentType。`GET /api/search?q=` 按文件名子串搜索（cursor 分页）。`GET /api/download` 会发 Accept-Ranges: bytes，并响应单个 Range 为 206。
+
+### 静态站点 API
+
+GET / POST / DELETE /api/sites 列站、切 SPA、删站。会话或 API key 均可。详见 [sites.zh-CN.md](./sites.zh-CN.md)。
+
+### 功能开关与图床
+
+```bash
+# 仅会话
+curl "https://<your-domain.com>/api/config" \
+  -u "$WEBDAV_USERNAME:$WEBDAV_PASSWORD"
+
+# PATCH 仅 Basic 会话 —— API Key 会被拒绝（403）
+curl -X PATCH "https://<your-domain.com>/api/config" \
+  -u "$WEBDAV_USERNAME:$WEBDAV_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"webdav":false,"imageHost":true}'
+```
+
+图床（网页会话 **或** API Key，与 `/api/sites` 相同；公开字节在 `SITES_HOST` 上，不在网盘源）：
+
+```bash
+# 列表
+curl "https://<your-domain.com>/api/images" -u "$WEBDAV_USERNAME:$WEBDAV_PASSWORD"
+
+# 上传（原始 body + X-File-Name，或 multipart 字段 file）
+curl -X POST "https://<your-domain.com>/api/images" \
+  -u "$WEBDAV_USERNAME:$WEBDAV_PASSWORD" \
+  -H "X-File-Name: shot.png" \
+  --data-binary @shot.png
+
+# 删除
+curl -X DELETE "https://<your-domain.com>/api/images?id=<id>" \
+  -u "$WEBDAV_USERNAME:$WEBDAV_PASSWORD"
+```
+
+公开地址：`https://<SITES_HOST>/i/{id}`。SVG 响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`。
+
+### MCP
+
+同源 Streamable HTTP MCP：`POST /mcp`（JSON-RPC 2.0）。鉴权与其它开放接口相同（`Authorization: Bearer <apiKey>` 或 `X-Api-Key`；不走网页会话，无 OAuth）。**MCP 依赖 API Key 开关** —— API Key 关闭（或 MCP 关闭）时 `/mcp` 返回 **404**。密钥缺失或无效返回 **HTTP 401**。工具：`list`、`upload`、`download`、`zip`、`mkdir`、`delete`、`search`、`move`、`copy`、`stat`、`share_create`、`share_list`、`share_revoke`、`trash_list`、`trash_restore`、`trash_empty`、`sites_list`、`sites_config`、`sites_delete`、`pull`、`push`、`publish_site`、`image_upload`、`image_list`、`image_delete`（包装上方 Open API）。超过 1 MiB 的上传自动改走分块（上限 **25 MB**；再大返回工具错误，请用网页端或 davflare-cli）。下载超过 1 MiB 用 `part` / `partSize` 分页。`zip` 走 `/api/archive` 打包目录（base64；同样 1 MiB / `part` 分页；硬上限 25 MB —— 再大请用 curl 调 `/api/archive`）。`delete` 默认进回收站；`hard=true` 为永久删除。可用 `trash_list` / `trash_restore` 捞回；`trash_empty` 永久清空回收站。`sites_*` 管理 `sites/` 下的静态站；`upload` / `delete` 也可以直接操作 `sites/<slug>/`。`pull` 走 `agents/{global|agent|agent/project}/{skills|rules|mcp}/` 并返回分层文件（合并：project 覆盖 agent 覆盖 global）；大文件与 `download` 一样分页。`push` 写入该树（`mcp.json` 只能用 `${env:...}`，不要明文密钥）。`publish_site` 把网盘目录同步到 `sites/{slug}/`（同名覆盖，不删 SPA 配置；站点开关关闭时 404）。 `image_upload` / `image_list` / `image_delete` 包装 `/api/images`（公开地址 `https://<SITES_HOST>/i/{id}` 和 Markdown；上限 20 MB；图床开关关闭时 404）。
+
+#### 自描述：连上就能用
+
+服务端让 MCP 客户端**不需要先读文档**就能正确操作，靠三件事：
+
+1. **`initialize` 返回 `instructions`**（中文）。客户端会把它注入模型上下文，内容涵盖：路径即 R2 object key 的心智模型、「先 `list` 再动手」的默认流程、`path` 是目标目录 / `name` 是文件名的参数语义、1 MiB 与 25 MB 的容量边界、`delete` 默认进回收站、功能开关关闭导致 404 的说明、`push` 禁明文密钥的安全约束，以及备份 / 建站 / 分享三类典型任务。
+2. **每个工具带 `title`（中文短名）与 `annotations`**。`readOnlyHint: true` 标出只读工具（`list` / `download` / `search` / `stat` / `zip` / `*_list`），`destructiveHint: true` 标出有破坏性的工具（`delete` / `trash_empty` / `move` / `upload` / `image_delete` 等），客户端 UI 可据此加确认。25 个工具全部覆盖。
+3. **参数错误自解释**。报错不只说缺什么，还给出 `Correct shape` 的完整调用示例，调用方可一次自我纠正。例如把完整路径误塞进 `path`：
+
+   ```json
+   {"name":"upload","arguments":{"path":"docs","name":"a.txt","content":"hello"}}
+   ```
+
+网页侧 `#/mcp` 试玩台提供「拉取实际说明」按钮，可直接看到服务端下发的 `instructions` 原文并复制，用于确认自描述确实生效。
+
+
+```bash
+# initialize
+curl -X POST "https://<your-domain.com>/mcp" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}'
+
+# tools/list
+curl -X POST "https://<your-domain.com>/mcp" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+Cursor（`mcp.json`）：
+
+```json
+{
+  "mcpServers": {
+    "davflare": {
+      "url": "https://<your-domain.com>/mcp",
+      "headers": {
+        "Authorization": "Bearer <apiKey>"
+      }
+    }
+  }
+}
+```
+
+### 对话里发限时分享
+
+1. 让助手对某个文件/目录调用 `share_create`，并设 `expiresInHours=24`（可选 `extractCode`）。
+2. 把返回的分享 `url`（路径 `/share/{token}`）转发出去即可。
+3. 用 `share_list` / `share_revoke`（传入 `token`）查看与撤销。
+
+### 对话里把某目录打成 zip 拉回本地
+
+1. 让助手对某个目录路径调用 `zip`（不必 `share_create`，无公开链接）。
+2. 小包（≤ 1 MiB）以 base64 返回 —— 解码后存成 `.zip`。
+3. 更大时传 `part=1`、`part=2`…（可选 `partSize`）拼接各片；或用 API Key curl `GET /api/archive?path=`。
+
+### 对话里误删再捞回来
+
+1. `delete` 默认进回收站（软删）。
+2. 用 `trash_list` 查看 `trashKey` / `originalKey`。
+3. 用 `trash_restore`（传入 `trashKey`）还原。
+4. 或 `trash_empty` 永久清空回收站。
+
+### 用 Cursor 试 MCP
+
+网页试玩台：打开 `#/mcp`（`#/settings` 也有入口），粘贴 API Key，点「列出工具」（`tools/list`）与「试一下」（只读 `list` 根目录），两项通过后复制 Cursor `mcp.json`。仍走现有 `POST /mcp`，不新增接口。
+
+1. `#/settings` 保持 **API Key**、**MCP**、**静态站点** 打开，创建一把密钥。
+2. 粘贴到 Cursor 的 `mcp.json`（换成你的域名和密钥）——与上方 JSON 相同。
+3. 打开本仓库 [`agents/examples/hello-site/`](../agents/examples/hello-site/)，让 Cursor 按 `SKILL.md` 做（只用现有 `publish_site`，可选 `image_upload`）。
+4. 跑完得到 `https://sites.<你的域>/hello/`（你真实的 `SITES_HOST`）。没有别人能打开的公共演示站。
+
+### Agent 目录
+
+skills / rules / MCP 片段：`agents/{global|{agent}|{agent}/{project}}/{skills|rules|mcp}/`。v2 的 `pull` / `push` 会走这棵树（也可用网页端）。合并：project 覆盖 agent 覆盖 global。`mcp.json` 不要明文密钥。完整约定：[agents.zh-CN.md](./agents.zh-CN.md)。
+
+### 双向同步示例
+
+以本地为准；冲突时先备份远端。鉴权与上传相同（Bearer / `X-Api-Key`），不走网页会话。WebDAV 协议不变。
+
+1. 用 `GET /api/list` 列出，比较本地 mtime/size/etag 与远端 `uploaded` / `size` / `etag`。
+2. 仅本地新增/变更 → `POST /api/upload?overwrite=1`。
+3. 仅远端新增/变更 → `GET /api/download`。
+4. 两边都变 → `POST /api/backup?path=remoteKey`，再把本地内容覆盖上传到原文件名。
+5. 可选的本地删除：`DELETE /api/delete`（除非客户端维护同步库，否则跳过）。远端多出来的文件：下载下来。

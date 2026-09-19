@@ -1,0 +1,242 @@
+import { featureDisabledResponse, loadFeatureFlags } from "../_flags";
+import {
+  SITES_PREFIX,
+  SiteConfig,
+  isValidSlug,
+  loadSiteConfig,
+  normalizeSitesHost,
+  siteConfigKey,
+} from "../_sites";
+import {
+  copyObject,
+  isCollectionObject,
+  isSessionOrKeyAuthorized,
+  jsonResponse,
+  listDescendants,
+  normalizeDirKey,
+  resolveAsDirectory,
+  textResponse,
+} from "./_apikey";
+
+interface SitesApiEnv {
+  BUCKET: R2Bucket;
+  WEBDAV_USERNAME: string;
+  WEBDAV_PASSWORD: string;
+  SITES_HOST?: string;
+}
+
+const SITE_STATS_MAX_OBJECTS = 5000;
+const SITE_STATS_TTL_MS = 10 * 60 * 1000;
+const SITE_DELETE_MAX_OBJECTS = 5000;
+
+async function listSiteSlugs(bucket: R2Bucket): Promise<string[]> {
+  const slugs: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const listing = await bucket.list({ prefix: SITES_PREFIX, delimiter: "/", cursor });
+    for (const prefix of listing.delimitedPrefixes) {
+      const slug = prefix.slice(SITES_PREFIX.length).replace(/\/$/, "");
+      if (slug) slugs.push(slug);
+    }
+    if (!listing.truncated) break;
+    cursor = listing.cursor;
+  } while (true);
+  return slugs;
+}
+
+/** 聚合站点文件数/总大小；缓存未过期直接复用，扫描封顶防大站超时 */
+async function computeSiteStats(
+  bucket: R2Bucket,
+  slug: string,
+  cached: SiteConfig["stats"]
+): Promise<SiteConfig["stats"]> {
+  if (cached && Date.now() - new Date(cached.cachedAt).getTime() < SITE_STATS_TTL_MS) {
+    return cached;
+  }
+  let objects = 0;
+  let size = 0;
+  let truncated = false;
+  let cursor: string | undefined;
+  do {
+    const listing = await bucket.list({ prefix: `${SITES_PREFIX}${slug}/`, cursor, limit: 500 });
+    for (const object of listing.objects) {
+      objects += 1;
+      size += object.size;
+      if (objects >= SITE_STATS_MAX_OBJECTS) {
+        // 只有服务端还因分页而 truncated 时，统计才是“至少 N 个”的下限；
+        // 恰好等于上限且已读完最后一页时不应误标 truncated。
+        truncated = listing.truncated;
+        break;
+      }
+    }
+    if (truncated || !listing.truncated) break;
+    cursor = listing.cursor;
+  } while (true);
+  return { objects, size, cachedAt: new Date().toISOString(), ...(truncated ? { truncated: true } : {}) };
+}
+
+async function saveSiteConfig(bucket: R2Bucket, config: SiteConfig): Promise<void> {
+  await bucket.put(siteConfigKey(config.slug), JSON.stringify(config), {
+    httpMetadata: { contentType: "application/json" },
+  });
+}
+
+export const onRequestGet: PagesFunction<SitesApiEnv> = async (context) => {
+  const { request, env } = context;
+  if (!(await isSessionOrKeyAuthorized(
+      request,
+      env.BUCKET,
+      env.WEBDAV_USERNAME,
+      env.WEBDAV_PASSWORD
+    ))) {
+    return textResponse("Unauthorized", 401);
+  }
+
+  const url = new URL(request.url);
+  const withStats = url.searchParams.get("stats") === "1";
+  const statsSlug = url.searchParams.get("slug");
+
+  const slugs = await listSiteSlugs(env.BUCKET);
+  const sites = [];
+  for (const slug of slugs) {
+    const config = (await loadSiteConfig(env.BUCKET, slug)) || { slug };
+    let stats = config.stats;
+    if (withStats && (!statsSlug || statsSlug === slug)) {
+      stats = await computeSiteStats(env.BUCKET, slug, config.stats);
+      // 缓存命中时 computeSiteStats 直接返回 config.stats 同一引用，跳过多余写入。
+      if (stats !== config.stats) {
+        await saveSiteConfig(env.BUCKET, { ...config, slug, stats });
+      }
+    }
+    sites.push({ slug, spa: Boolean(config.spa), stats: stats || null });
+  }
+
+  return jsonResponse({
+    sitesHost: normalizeSitesHost(env.SITES_HOST) || null,
+    sites,
+  });
+};
+
+export const onRequestPost: PagesFunction<SitesApiEnv> = async (context) => {
+  const { request, env } = context;
+  if (!(await isSessionOrKeyAuthorized(
+      request,
+      env.BUCKET,
+      env.WEBDAV_USERNAME,
+      env.WEBDAV_PASSWORD
+    ))) {
+    return textResponse("Unauthorized", 401);
+  }
+
+  let body: { slug?: string; spa?: boolean; source?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("Bad Request", { status: 400 });
+  }
+
+  const slug = String(body.slug || "").trim().toLowerCase();
+  if (!isValidSlug(slug)) {
+    return new Response("Bad slug", { status: 400 });
+  }
+
+  // Publish: copy a drive folder onto sites/{slug}/ (same semantics as MCP publish_site).
+  const sourceRaw = typeof body.source === "string" ? body.source.trim() : "";
+  if (sourceRaw) {
+    const flags = await loadFeatureFlags(env.BUCKET);
+    if (!flags.sites) return featureDisabledResponse();
+
+    const source = normalizeDirKey(sourceRaw);
+    if (source instanceof Response) return source;
+
+    const targetPrefix = `${SITES_PREFIX}${slug}`;
+    if (source === targetPrefix || source.startsWith(`${targetPrefix}/`)) {
+      return textResponse("source cannot be the target site folder", 400);
+    }
+
+    if (!(await resolveAsDirectory(env.BUCKET, source))) {
+      return textResponse("source folder not found", 404);
+    }
+
+    const descendants = await listDescendants(env.BUCKET, source);
+    if (descendants instanceof Response) return descendants;
+
+    let copied = 0;
+    for (const object of descendants.objects) {
+      if (isCollectionObject(object)) continue;
+      const rel = object.key.slice(source.length + 1);
+      if (!rel || rel.includes("..")) continue;
+      const to = `${SITES_PREFIX}${slug}/${rel}`;
+      const error = await copyObject(env.BUCKET, object.key, to, { overwrite: true });
+      if (error) return error;
+      copied += 1;
+    }
+
+    return jsonResponse({
+      slug,
+      source,
+      copied,
+      sitesHost: normalizeSitesHost(env.SITES_HOST) || null,
+    });
+  }
+
+  // 只允许给已存在的站点改配置：前缀下至少要有一个对象
+  const existing = await env.BUCKET.list({ prefix: `${SITES_PREFIX}${slug}/`, limit: 1 });
+  if (existing.objects.length === 0) {
+    return new Response("Site not found", { status: 404 });
+  }
+
+  const config = (await loadSiteConfig(env.BUCKET, slug)) || { slug };
+  config.slug = slug;
+  config.spa = Boolean(body.spa);
+  await saveSiteConfig(env.BUCKET, config);
+
+  return jsonResponse({ slug, spa: config.spa });
+};
+
+export const onRequestDelete: PagesFunction<SitesApiEnv> = async (context) => {
+  const { request, env } = context;
+  if (!(await isSessionOrKeyAuthorized(
+      request,
+      env.BUCKET,
+      env.WEBDAV_USERNAME,
+      env.WEBDAV_PASSWORD
+    ))) {
+    return textResponse("Unauthorized", 401);
+  }
+
+  const slug = (new URL(request.url).searchParams.get("slug") || "").trim().toLowerCase();
+  if (!isValidSlug(slug)) {
+    return new Response("Bad slug", { status: 400 });
+  }
+
+  // 分批删除站点对象（R2 单次最多 1000 个键），封顶防止超大站点拖垮请求。
+  // 默认保留站点配置（重新部署同一 slug 时 SPA 开关等自动保留）；
+  // purge=1 连配置一起删，用于彻底移除站点。
+  const purge = new URL(request.url).searchParams.get("purge") === "1";
+  let deleted = 0;
+  let cursor: string | undefined;
+  do {
+    const listing = await env.BUCKET.list({
+      prefix: `${SITES_PREFIX}${slug}/`,
+      cursor,
+      limit: 500,
+    });
+    const keys = listing.objects.map((object) => object.key);
+    if (keys.length > 0) {
+      await env.BUCKET.delete(keys);
+      deleted += keys.length;
+    }
+    if (deleted >= SITE_DELETE_MAX_OBJECTS && listing.truncated) {
+      return new Response(
+        `站点对象超过 ${SITE_DELETE_MAX_OBJECTS}，请用 WebDAV/CLI 分批清理`,
+        { status: 400 }
+      );
+    }
+    if (!listing.truncated) break;
+    cursor = listing.cursor;
+  } while (true);
+
+  if (purge) await env.BUCKET.delete(siteConfigKey(slug));
+  return jsonResponse({ slug, deleted });
+};

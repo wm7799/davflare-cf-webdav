@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Davflare Bookmarks</title>
+    <link rel="stylesheet" href="bookmarks.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <header class="brand">
+          <img src="icons/icon48.png" width="36" height="36" alt="" />
+          <div>
+            <h1>Davflare</h1>
+            <p id="brandSub">Bookmarks</p>
+          </div>
+        </header>
+
+        <div class="viewSwitch" role="tablist">
+          <button id="switchBookmarks" class="navItem active" type="button">Bookmarks</button>
+          <button id="switchDrive" class="navItem" type="button">Drive</button>
+          <button id="switchWorkspaces" class="navItem" type="button">Workspaces</button>
+          <button id="switchTabRules" class="navItem" type="button">Tab groups</button>
+          <button id="switchSettings" class="navItem" type="button">Settings</button>
+        </div>
+
+        <nav class="nav" id="bookmarksNav">
+          <button class="navItem" id="navAll" data-filter="all" type="button">
+            <span id="navAllText">All bookmarks</span>
+            <span class="count" id="navAllCount">0</span>
+          </button>
+          <button class="navItem" id="navPinned" type="button">
+            <span id="navPinnedText">Pinned</span>
+            <span class="count" id="navPinnedCount">0</span>
+          </button>
+          <p class="navTitle navTitleRow">
+            <span id="folderTitle">Folders</span>
+            <button id="folderAddBtn" class="navAdd" type="button" title="New folder">＋</button>
+          </p>
+          <div id="folderNav"></div>
+          <p class="navTitle" id="tagTitle">Tags</p>
+          <div id="tagNav"></div>
+        </nav>
+
+        <footer class="sideFoot">
+          <div class="syncRow">
+            <span class="syncLabel" id="syncLabel">WebDAV</span>
+            <span class="syncInfo" id="syncInfo">…</span>
+          </div>
+          <button id="addBtn" class="primary addMain" type="button">Add</button>
+          <div class="footRow">
+            <div class="moreWrap">
+              <button id="moreBtn" class="ghost menuToggle" type="button" aria-haspopup="true" aria-expanded="false">⋯ <span id="moreText">More</span></button>
+              <div id="moreMenu" class="popMenu" role="menu">
+                <button id="importBtn" class="menuItem" type="button">Import</button>
+                <button id="exportBtn" class="menuItem" type="button">Export</button>
+              </div>
+            </div>
+          </div>
+          <div class="footRow quietRow">
+            <button id="driveBtn" class="quiet" type="button">Drive</button>
+            <button id="settingsBtn" class="quiet" type="button">Settings</button>
+          </div>
+        </footer>
+      </aside>
+
+      <main class="main">
+        <div id="viewBookmarks">
+          <header class="topbar">
+            <input id="search" type="search" spellcheck="false" placeholder="Search bookmarks…" />
+            <select id="folderSelect"></select>
+            <select id="sinceSelect"></select>
+            <div class="presetWrap">
+              <select id="presetSelect"></select>
+              <button id="presetSave" class="ghost" type="button" title="Save current filter as preset">＋</button>
+              <button id="presetDelete" class="ghost" type="button" title="Delete preset" hidden>✕</button>
+            </div>
+            <div class="spacer"></div>
+            <button id="selAllBtn" class="ghost" type="button">Select all</button>
+            <button id="libRefresh" type="button" title="Reload">Reload</button>
+            <div class="viewToggle" role="group" aria-label="View">
+              <button id="viewGrid" class="active" type="button" title="Grid">▦</button>
+              <button id="viewList" type="button" title="List">☰</button>
+            </div>
+            <button id="themeToggle" type="button" title="Theme">☾</button>
+          </header>
+
+          <div id="batchBar" class="batchBar hidden">
+            <span id="batchCount" class="batchCount"></span>
+            <button id="batchMove" class="ghost" type="button">Move</button>
+            <button id="batchTags" class="ghost" type="button">Tags</button>
+            <button id="batchPin" class="ghost" type="button">Pin</button>
+            <button id="batchDelete" class="danger" type="button">Delete</button>
+            <span class="spacer"></span>
+            <button id="batchCancel" class="ghost" type="button" title="Clear selection">✕</button>
+          </div>
+
+          <div id="banner" class="banner hidden"></div>
+          <p id="loading" class="loading hidden">Loading…</p>
+          <section id="cards" class="cards"></section>
+          <section id="rows" class="rows hidden"></section>
+          <div id="emptyState" class="emptyState hidden"></div>
+        </div>
+
+        <div id="viewDrive" class="hidden">
+          <header class="topbar">
+            <span id="driveUrl" class="topHint"></span>
+            <div class="spacer"></div>
+            <button id="driveRefresh" class="ghost" type="button">Reload</button>
+            <button id="driveExternal" class="ghost" type="button">Open in new tab</button>
+          </header>
+          <div id="bannerDrive" class="banner hidden"></div>
+          <div id="driveRoot" class="driveFrame"></div>
+        </div>
+
+        <div id="viewWorkspaces" class="hidden">
+          <header class="topbar">
+            <button id="saveWindowBtn" class="primary" type="button">Save current window</button>
+            <span id="wsCount" class="topHint"></span>
+            <div class="spacer"></div>
+          </header>
+          <div id="bannerWs" class="banner hidden"></div>
+          <section id="wsList" class="wsList"></section>
+          <div id="wsEmpty" class="emptyState hidden"></div>
+        </div>
+
+        <div id="viewTabRules" class="hidden">
+          <header class="topbar">
+            <button id="applyGroupsBtn" class="primary" type="button">Group current window</button>
+            <label class="checkLabel" id="fallbackLabel">
+              <input type="checkbox" id="fallbackDomain" />
+              <span id="fallbackText">Group the rest by domain</span>
+            </label>
+            <div class="spacer"></div>
+            <button id="ruleAddBtn" class="ghost" type="button">Add rule</button>
+          </header>
+          <div id="bannerRules" class="banner hidden"></div>
+          <section id="ruleList" class="rows"></section>
+          <div id="rulesEmpty" class="emptyState hidden"></div>
+        </div>
+
+        <div id="viewSettings" class="hidden">
+          <header class="topbar">
+            <span id="setupHint" class="topHint"></span>
+            <div class="spacer"></div>
+          </header>
+          <div id="bannerSettings" class="banner hidden"></div>
+          <section class="settingsCard">
+            <form id="settingsForm" novalidate>
+              <label for="instanceUrl" id="urlLabel">Instance URL</label>
+              <input
+                id="instanceUrl"
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                spellcheck="false"
+                placeholder="https://your-domain.com"
+              />
+              <p class="hint" id="urlHint">
+                Paste the Pages or custom-domain URL of your own Davflare instance.
+              </p>
+
+              <label for="bookmarkPath" id="pathLabel">Bookmark directory</label>
+              <input
+                id="bookmarkPath"
+                type="text"
+                spellcheck="false"
+                autocapitalize="off"
+                placeholder="bookmarks"
+              />
+              <p class="hint" id="pathHint">
+                Relative to /webdav/. Default is "bookmarks".
+              </p>
+
+              <fieldset class="settingsSection">
+                <legend id="modeLabel">Default toolbar view</legend>
+                <label class="radio" for="modeDrive">
+                  <input type="radio" id="modeDrive" name="toolbarMode" value="drive" />
+                  <span id="modeDriveText">Drive</span>
+                </label>
+                <label class="radio" for="modeBookmarks">
+                  <input type="radio" id="modeBookmarks" name="toolbarMode" value="bookmarks" />
+                  <span id="modeBookmarksText">Bookmark library</span>
+                </label>
+                <p class="hint" id="modeHint">
+                  Both open this page; right-click the toolbar icon to switch anytime.
+                </p>
+              </fieldset>
+
+              <fieldset class="settingsSection">
+                <legend id="davLabel">WebDAV credentials</legend>
+                <label for="davUser" id="userLabel">Username</label>
+                <input
+                  id="davUser"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  autocapitalize="off"
+                />
+                <label for="davPass" id="passLabel">Password</label>
+                <input
+                  id="davPass"
+                  type="password"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                />
+                <p class="hint" id="davHint">
+                  Stored only on this device. Same values as your deployment's
+                  WEBDAV_USERNAME / WEBDAV_PASSWORD.
+                </p>
+              </fieldset>
+
+              <div class="settingsActions">
+                <button type="submit" id="settingsSave" class="primary">Save</button>
+                <button type="button" id="testConn" class="ghost">Test connection</button>
+                <p id="settingsStatus" class="status" role="status"></p>
+              </div>
+              <p id="probeStatus" class="status" role="status"></p>
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="addDialog">
+      <form id="addForm" novalidate>
+        <h2 id="addDialogTitle">Add bookmark</h2>
+        <label for="addUrl" id="addUrlLabel">URL</label>
+        <input id="addUrl" type="url" spellcheck="false" placeholder="https://…" />
+        <label for="addTitleInput" id="addTitleLabel">Title</label>
+        <input id="addTitleInput" type="text" spellcheck="false" />
+        <p id="addError" class="status err"></p>
+        <menu>
+          <button id="addCancel" class="ghost" type="button">Cancel</button>
+          <button id="addSave" class="primary" type="submit">Add</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="importDialog">
+      <form id="importForm" novalidate>
+        <h2 id="importDialogTitle">Import bookmarks</h2>
+        <p id="importDesc" class="dialogSubtitle"></p>
+        <input id="importFile" type="file" accept=".json,.htm,.html,application/json,text/html" hidden />
+        <div class="snapActions" id="importFileRow">
+          <button id="importPick" class="primary" type="button"></button>
+        </div>
+        <fieldset class="dlgSection">
+          <legend id="importAltLegend"></legend>
+          <div class="snapActions">
+            <button id="importBrowserBtn" class="ghost" type="button"></button>
+            <button id="importHamHomeBtn" class="ghost" type="button"></button>
+          </div>
+        </fieldset>
+        <p id="importStatus" class="status err"></p>
+        <menu>
+          <button id="importCancel" class="ghost" type="button">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="exportDialog">
+      <form id="exportForm" novalidate>
+        <h2 id="exportDialogTitle">Export bookmarks</h2>
+        <p id="exportDesc" class="dialogSubtitle"></p>
+        <div class="snapActions">
+          <button id="exportHtmlBtn" class="primary" type="button"></button>
+          <button id="exportJsonBtn" class="primary" type="button"></button>
+        </div>
+        <fieldset class="dlgSection">
+          <legend id="exportChromeLegend">Browser</legend>
+          <label for="exportChromeFolder" id="exportChromeFolderLabel">Target folder</label>
+          <select id="exportChromeFolder"></select>
+          <label class="checkLabel" id="exportChromeSkipLabel">
+            <input type="checkbox" id="exportChromeSkip" checked />
+            <span id="exportChromeSkipText">Skip duplicates (same URL)</span>
+          </label>
+          <label class="checkLabel" id="exportChromeClearLabel">
+            <input type="checkbox" id="exportChromeClear" />
+            <span id="exportChromeClearText">Clear the target folder first</span>
+          </label>
+          <div class="snapActions">
+            <button id="exportChromeBtn" class="primary" type="button"></button>
+          </div>
+          <p id="exportChromeStatus" class="status err"></p>
+        </fieldset>
+        <fieldset class="dlgSection">
+          <legend id="exportHhLegend">HamHome round-trip</legend>
+          <p id="exportHhHint" class="hint"></p>
+          <div class="snapActions">
+            <button id="exportHamHomeBtn" class="primary" type="button"></button>
+          </div>
+        </fieldset>
+        <menu>
+          <button id="exportCancel" class="ghost" type="button">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="tagDialog">
+      <form id="tagForm" novalidate>
+        <h2 id="tagDialogTitle">Edit bookmark</h2>
+        <p id="tagTarget" class="dialogSubtitle"></p>
+        <label for="tagInput" id="tagInputLabel">Tags (comma separated)</label>
+        <input id="tagInput" type="text" spellcheck="false" placeholder="dev, docs" />
+        <label for="noteInput" id="noteInputLabel">Note</label>
+        <textarea id="noteInput" rows="3" spellcheck="false"></textarea>
+
+        <fieldset class="section" id="snapSection">
+          <legend id="snapLegend">Snapshot</legend>
+          <p id="snapInfo" class="status"></p>
+          <div class="snapActions">
+            <button id="snapCapture" class="primary" type="button">Capture</button>
+            <button id="snapView" class="ghost" type="button" disabled>View</button>
+            <button id="snapDownload" class="ghost" type="button" disabled>Download</button>
+            <button id="snapDelete" class="ghost" type="button" disabled>Delete</button>
+          </div>
+        </fieldset>
+
+        <menu>
+          <button id="tagCancel" class="ghost" type="button">Cancel</button>
+          <button id="tagSave" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="wsNameDialog">
+      <form id="wsNameForm" novalidate>
+        <h2 id="wsNameTitle">Workspace name</h2>
+        <input id="wsNameInput" type="text" spellcheck="false" />
+        <p id="wsNameError" class="status err"></p>
+        <menu>
+          <button id="wsNameCancel" class="ghost" type="button">Cancel</button>
+          <button id="wsNameSave" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="ruleDialog">
+      <form id="ruleForm" novalidate>
+        <h2 id="ruleDialogTitle">Grouping rule</h2>
+        <label for="ruleDomain" id="ruleDomainLabel">Domains (comma separated)</label>
+        <input id="ruleDomain" type="text" spellcheck="false" placeholder="github.com, gitlab.com" />
+        <label for="ruleUrl" id="ruleUrlLabel">URL contains</label>
+        <input id="ruleUrl" type="text" spellcheck="false" />
+        <label for="ruleTitle" id="ruleTitleLabel">Title contains</label>
+        <input id="ruleTitle" type="text" spellcheck="false" />
+        <label for="ruleRegex" id="ruleRegexLabel">URL regex</label>
+        <input id="ruleRegex" type="text" spellcheck="false" />
+        <p id="ruleError" class="status err"></p>
+        <div class="ruleGrid">
+          <div>
+            <label for="ruleName" id="ruleNameLabel">Group title</label>
+            <input id="ruleName" type="text" spellcheck="false" />
+          </div>
+          <div>
+            <label for="ruleColor" id="ruleColorLabel">Color</label>
+            <select id="ruleColor"></select>
+          </div>
+          <div>
+            <label for="ruleOrder" id="ruleOrderLabel">Priority</label>
+            <input id="ruleOrder" type="number" step="1" />
+          </div>
+        </div>
+        <label class="checkLabel" id="ruleCollapsedLabel">
+          <input type="checkbox" id="ruleCollapsed" />
+          <span id="ruleCollapsedText">Collapse the group</span>
+        </label>
+        <menu>
+          <button id="ruleCancel" class="ghost" type="button">Cancel</button>
+          <button id="ruleSave" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="batchMoveDialog">
+      <form id="batchMoveForm" novalidate>
+        <h2 id="batchMoveTitle">Move bookmarks</h2>
+        <label for="batchMoveInput" id="batchMoveLabel">Target folder</label>
+        <input id="batchMoveInput" type="text" spellcheck="false" list="batchMoveOptions" />
+        <datalist id="batchMoveOptions"></datalist>
+        <p class="hint" id="batchMoveHint"></p>
+        <p id="batchMoveError" class="status err"></p>
+        <menu>
+          <button id="batchMoveCancel" class="ghost" type="button">Cancel</button>
+          <button id="batchMoveSave" class="primary" type="submit">Move</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="batchTagsDialog">
+      <form id="batchTagsForm" novalidate>
+        <h2 id="batchTagsTitle">Edit tags</h2>
+        <label for="batchTagsAdd" id="batchTagsAddLabel">Add tags (comma separated)</label>
+        <input id="batchTagsAdd" type="text" spellcheck="false" placeholder="dev, docs" />
+        <label for="batchTagsRemove" id="batchTagsRemoveLabel">Remove tags (comma separated)</label>
+        <input id="batchTagsRemove" type="text" spellcheck="false" />
+        <p id="batchTagsError" class="status err"></p>
+        <menu>
+          <button id="batchTagsCancel" class="ghost" type="button">Cancel</button>
+          <button id="batchTagsSave" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="folderDialog">
+      <form id="folderForm" novalidate>
+        <h2 id="folderDialogTitle">New folder</h2>
+        <label for="folderInput" id="folderNameLabel">Folder path</label>
+        <input id="folderInput" type="text" spellcheck="false" list="folderOptionsList" />
+        <datalist id="folderOptionsList"></datalist>
+        <p class="hint" id="folderNameHint"></p>
+        <p id="folderError" class="status err"></p>
+        <menu>
+          <button id="folderCancel" class="ghost" type="button">Cancel</button>
+          <button id="folderSave" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="presetDialog">
+      <form id="presetForm" novalidate>
+        <h2 id="presetDialogTitle">Save filter preset</h2>
+        <p id="presetSummary" class="dialogSubtitle"></p>
+        <label for="presetName" id="presetNameLabel">Name</label>
+        <input id="presetName" type="text" spellcheck="false" />
+        <p id="presetError" class="status err"></p>
+        <menu>
+          <button id="presetCancel" class="ghost" type="button">Cancel</button>
+          <button id="presetSaveBtn" class="primary" type="submit">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="confirmDialog">
+      <p id="confirmText"></p>
+      <menu>
+        <button id="confirmCancel" class="ghost" type="button">Cancel</button>
+        <button id="confirmOk" class="danger" type="button">Delete</button>
+      </menu>
+    </dialog>
+
+    <script src="url.js"></script>
+    <script src="bookmarks.js"></script>
+    <script src="dav.js"></script>
+    <script src="pinyinDict.js"></script>
+    <script src="pinyin.js"></script>
+    <script src="bookmarksView.js"></script>
+    <script src="workspaces.js"></script>
+    <script src="tabRules.js"></script>
+    <script src="hamhome.js"></script>
+    <script src="snapshots.js"></script>
+    <script src="bookmarksApp.js"></script>
+    <!-- 网盘视图是 Web 端 React App 的构建产物(npm run build:extension 生成),
+         文件缺失时 bookmarksApp 会显示构建提示并保留「新标签页打开」兜底。 -->
+    <script type="module" src="drive/drive.js"></script>
+  </body>
+</html>

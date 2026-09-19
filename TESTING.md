@@ -1,0 +1,481 @@
+# FlareDrive 回归测试清单
+
+> 最近一轮：2026-09-06 0a-16（筛选预设选中后 ✕ 同步，issue #84）
+> 前几轮：2026-09-06 0a-15（筛选预设 + 可移植性文档，issue #63 #64 P2 收尾）、2026-09-06 0a-14（书签库批量操作 + 置顶/文件夹管理 + 写回浏览器书签栏 + HamHome 往返，issue #63 #64）、2026-09-06 0a-13（库页面实时同步外部收藏写入 + 显式刷新入口，issue #77）、2026-09-06 0a-12（工具栏收藏弹窗 + 快捷键 + omnibox，issue #62）、2026-09-06 0a-11（扩展书签导入导出改为文件 + 收编 HamHome 一级入口，issue #65）、2026-09-06 0a-10（扩展设置并入主页 + 首次使用强制配置 + 删除 newtab 变体；书签库 UI 打磨 #57）、2026-09-05 0a-8（扩展网盘视图去 iframe，原生挂载 Web 端 React App）、2026-08-30 第三轮四批（Sites 管理面板 + MCP 深化 + davflare-cli）、2026-08-29 第六批（缺陷修复 + B5/B9/C9 收尾 + i18n 第二阶段收编 + 界面美化 + 单测/e2e 落地）、第五批（A9 i18n 第一阶段 + scripts/api-e2e.sh 回归套件沉淀）、第四批（多选拖拽/面包屑下拉/图标扩展）、第三批（目录分享/回收站清理/搜索高亮/动效 11 项）、第二批（目录级 API 等）、首批（暗色模式等）
+> 约束：所有测试数据操作仅在自己创建的目录内进行，测试后清理。
+
+## 0a-16. 筛选预设选中后 ✕ / 下拉同步（issue #84，2026-09-06）
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 根因 | `applyPreset` 只改 filter/since 并 `renderAll()`，未刷新预设下拉/✕；`renderAll` 与 `sinceSelect` 也不回写 preset chrome，导致选中已有预设后筛选已生效但 ✕ 偶发不出现 |
+| 修复 | `BookmarksView.findActivePreset` 抽出匹配逻辑；`renderAll` 与 `since` 变更均调用 `renderPresetSelect`，选中预设后立即同步下拉选中态与 ✕ |
+| 版本 | extension manifest 1.3.7 → 1.3.8 |
+
+### 待手动回归（Chrome 加载扩展）
+1. 存预设 → 清空筛选 → 下拉选中该预设：标签+时间生效，且 ✕ **立即**出现（无需再保存）。
+2. 手动改 `since` 使不再匹配 → 下拉回占位、✕ 隐藏；再改回匹配值 → 下拉选中且 ✕ 再现。
+3. 点侧栏其它标签/全部后预设 chrome 同步清空；再点回匹配标签+时间后恢复。
+
+## 0a-15. 筛选预设 + 可移植性文档（issue #63 #64 P2 收尾，2026-09-06）
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 筛选预设 | 顶栏新增「筛选预设」下拉 + ＋/✕：把当前「标签+时间」筛选组合存为预设（chrome.storage.sync `bookmarkPresets`，`normalizePresets` 规范化、上限 12、同名覆盖），选中即应用；当前筛选恰为某预设时显示 ✕ 删除（带确认）；非标签筛选时点 ＋ 提示 |
+| 可移植性文档 | 新增 `docs/bookmarks-portability.md` / `.zh-CN.md`：三种格式权威面、导入嗅探规则、字段映射表（Davflare ↔ HamHome）、冲突策略（If-Match/412、HamHome 写回永不删除、分类签名合并幂等、Netscape 成员权威） |
+
+### 待手动回归（Chrome 加载扩展）
+1. 点某个标签进入筛选 → 选好时间范围 → 顶栏 ＋ 输入名称保存 → 预设出现在下拉；切换到其它筛选再选回该预设，标签+时间组合即时生效。
+2. 当前筛选恰好等于某预设内容时下拉自动选中且 ✕ 出现；点 ✕ 确认后预设消失。
+3. 未选标签筛选时点 ＋ → 顶部横幅提示先选标签；同名保存会覆盖旧预设。
+4. 中英文案与暗色主题下预设控件样式正常；顶栏在窄窗口不溢出（预设下拉限宽 170px）。
+
+## 0a-14. 书签库批量操作 + 置顶/文件夹管理 + 可移植性写回（issue #63 #64，2026-09-06）
+
+对照 HamHome 非 AI 库页补齐 Davflare 书签库的交互能力（#63 P0/P1），并把可移植性从单向导入扩展为双向（#64 P1）。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 多选 | 网格/列表每条书签带复选框；Shift+点击区间选择；顶栏「全选/取消全选」作用于当前筛选结果 |
+| 批量栏 | 选中后顶部出现批量栏：已选计数 + 移动（datalist 可输入新路径）/ 标签（批量加/减）/ 置顶·取消置顶 / 删除（带确认）+ 清除选择；一次操作处理全部选中项，单次 If-Match PUT 收敛 |
+| 置顶 | 模型新增 `pinned`/`pinnedAt`（sanitize/normalize 保字段，JSON sidecar 持久化，`adoptRichFields` 回填）；列表置顶区按 pinnedAt 倒序在前；卡片/行有 📌 标记与行内按钮、⋯ 菜单项；侧栏新增「置顶」入口（含空态） |
+| 文件夹 | 模型新增声明式 `folders` 数组（空文件夹可存在，随 JSON/HTML 往返）；侧栏「分类」标题旁＋新建；文件夹行 hover ⋯ 菜单支持重命名（含子路径级联改写）与空文件夹删除；空文件夹与筛选空态一致展示 |
+| 写回浏览器书签栏 | 导出对话框新增「浏览器」区：目标文件夹下拉（来自 chrome.bookmarks.getTree）、跳过重复（urlKey 对比）、可选先清空目标夹（确认）；按 buildChromeWritePlan 计划递归创建；bookmarks 权限仍为 optional，写回时按需申请 |
+| HamHome 往返 | `HamHome.exportTo(model, remoteMeta, remoteCats, now)` 把当前库合并写入 /HamHomeSync/bookmarks/meta.json + categories.json（categories.json 先写、meta.json 后写，与 HamHome 自身安全写序一致）；合并语义：同 URL 复用 HamHome 原条目 id 原地更新，新条目用 dav-<urlhash> 确定性 id，HamHome 已有条目永不删除；分类按 name_parentId 签名复用、缺省以路径为 id 声明 |
+| 顺手修复 | `applyCopy` 中 `t.settingsUrlHint` 引用了不存在的 key，设置页「实例地址」提示文案从未显示；改为 `t.urlHint` |
+
+### 单元测试
+`extensionBatch.test.ts`（pinned 字段/批量移动/加减标签/批量删除/文件夹增删重命名/HTML 往返含空文件夹/buildChromeWritePlan 去重）、`extensionHamhome.test.ts`（exportTo 往返、分类签名合并、isDeleted 不吞更新、hash URL 等价）、`extensionBookmarksView.test.ts`（空文件夹列表、pinned 筛选、置顶排序）；`npm test` 901 例全绿，`tsc --noEmit` 通过。
+
+### 待手动回归（Chrome 加载扩展）
+1. 多选：列表页勾选若干书签 → 批量栏出现；Shift+点击做区间选择；「全选」后批量删除 ≥10 条 → 一次确认后远端 bookmarks.html/json 同步更新。
+2. 批量移动/标签：选中多条 → 移动到新输入的路径（如 qa/tmp）→ 库页与 JSON sidecar 均出现新分类；批量加减标签后搜索可命中。
+3. 置顶：单条/批量置顶 → 列表置顶区按最近置顶在前，侧栏「置顶」计数正确；刷新页面、重新打开库页（缓存回放）后置顶仍在；导出 JSON 再导入，置顶保留。
+4. 文件夹：＋新建空文件夹 → 侧栏出现且空态展示与筛选空态一致；重命名含子层的分类 → 卡片分类 chip 与计数跟随；删除空文件夹后侧栏消失。
+5. 写回浏览器书签栏：导出对话框选择目标文件夹 → 写回后 Chrome 书签管理器可见（含空文件夹结构）；再次写回勾选「跳过重复」不产生重复项；勾选「先清空」并确认后目标夹旧内容被移除。
+6. HamHome 往返：已用 HamHome 同步过的实例上执行「写回 HamHomeSync」→ HamHome 端下一次同步能把 Davflare 新增条目拉进本地库，且 HamHome 原有条目无丢失；重复执行写回幂等（不新增重复分类/条目）。
+7. 中英文案、明暗主题下新增批量栏/菜单/对话框样式与整体一致。
+
+## 0a-13. 库页面实时同步外部收藏写入 + 显式刷新入口（issue #77，2026-09-06）
+
+修复「右键/弹窗收藏成功（远端已写入）后，已打开的库页面搜索仍搜不到新条目」的偶发陈旧：popup / quickSave 与库页面之间此前没有任何通知通道，库页面只在整页刷新时才重读缓存。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 实时应用外部写入 | `bookmarksApp.js` 新增 `chrome.storage.onChanged` 监听（仅 local 区 `bookmarksCache`）：popup / 右键快藏成功后写回的最新 model+etag 即时并入内存态并重渲染，搜索词/筛选保持不变，命中新收藏 |
+| 自写回声过滤 | `applyExternalCache` 对 `syncedAt === state.syncedAt` 的变化（refresh/persist 自身 `saveCache` 的回声）直接忽略，避免重复渲染闪烁 |
+| 在途同步守卫 | `refresh()`/`persist()` 以 `inflightSync` 计数标记在途；在途时暂缓应用外部缓存，等 PUT/GET 收敛（成功写回或 412→refresh），避免中途替换内存 model/etag 吞掉本地变更或让条件请求失效（If-Match 保证最终一致） |
+| 显式刷新入口 | 书签视图顶栏新增「刷新」按钮（`#libRefresh`，中英文案齐全）：走既有 `refresh()` 条件 GET，远端未变时 304 秒回；外部缓存写入失败（如 quota）等漏报场景用它兜底 |
+
+### 待手动回归（Chrome 加载扩展）
+1. 打开书签库页签并停留在搜索结果页 → 另一标签页右键「收藏此页到 Davflare」→ 不刷新库页签，直接搜索刚收藏的关键词即可命中；列表计数/分类/标签同步更新。
+2. 同场景改用工具栏弹窗收藏（填分类/标签）→ 库页签同样即时可见。
+3. 库页签保持打开，点顶栏「刷新」→ 304 秒回（列表不闪、无网络大流量）；远端被其它端改动后点刷新 → 新内容立刻出现。
+4. 库页面内增删改书签 → 行为与之前一致（无重复渲染闪烁、412 冲突仍走重载提示）。
+5. 「刷新」按钮中英文案随浏览器语言切换，明暗主题下样式与顶栏其它控件一致。
+
+
+## 0a-12. 工具栏收藏弹窗 + 快捷键 + omnibox（issue #62，HamHome 式；2026-09-06）
+
+工具栏左键从「直开主页」改为弹出收藏弹窗；主页入口移入弹窗 footer。P1 补齐可配置快捷键与 omnibox 检索。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 弹窗 | 新增 `popup.html/css/js`：页头（favicon+标题+URL）、标题/分类（datalist 选现有分类，含祖先前缀）/标签三个输入、收藏按钮 + 行内状态（保存中/已收藏/已存在/错误）；右键一键收藏（contextMenus）保留 |
+| 弹窗状态机 | loading → ready；非 http(s) 页显示「只能收藏」；未配置实例显示引导 + 「去设置」按钮；加载失败显示错误 + 重试；412 冲突自动重载远端并保留用户输入；成功后禁用按钮并记忆 `popupLastFolder` |
+| 主页入口 | 弹窗 footer「插件主页 / 设置」：优先聚焦已开的 bookmarks.html 标签页，否则新开（?view= 指定视图）；复用已开标签时若指定 view 会导航过去（settings 修复） |
+| manifest | `action.default_popup: "popup.html"`；描述同步更新 |
+| 快捷键（P1） | manifest `commands.save-current-page`（建议 Alt+Shift+S）：优先 `chrome.action.openPopup()` 弹出收藏弹窗（与左键同一 UI）；openPopup 不可用/失败（旧 Chrome）退化为后台静默收藏（复用右键菜单的 savePage 路径） |
+| omnibox（P1） | manifest `omnibox.keyword: "df"`：地址栏输入 `df <词>` 用 `Bookmarks.searchBookmarks`（title/url/标签/分类大小写不敏感子串 AND 匹配，不引拼音词典）检索 `bookmarksCache` 缓存；首条设为默认建议，回车/下拉选择按 disposition 打开；无命中回退书签库页 |
+| background | 删 `chrome.action.onClicked` 直开逻辑（`handleToolbarClick`/`openLibraryPage`）；右键「切换工具栏默认模式」改为「切换插件主页默认视图」，通知文案同步 |
+| 主页默认视图 | shell 初始视图改由 `resolveToolbarTarget` 决定（显式 `?view=` 优先；未配置实例落 settings 保持先配置后使用）；设置页文案改为「插件主页默认视图」 |
+| Bookmarks API | 新增 `folderPaths(model)`：排序去重的分类路径（含祖先前缀），供弹窗 datalist；新增 `searchBookmarks(model, query, limit)` 供 omnibox |
+| 设置页 | modeLabel/modeHint/settingsCleared 文案更新为「插件主页默认视图」语义 |
+
+### 待手动回归（Chrome 加载扩展）
+1. 任意网页点工具栏图标 → 弹出收藏弹窗，favicon/标题/URL 正确；填分类与标签 → 收藏 → 提示「已收藏」，书签库中可见且分类/标签正确。
+2. 同一页面再点图标 → 显示「该页面已在书签库中」且收藏按钮禁用。
+3. 弹窗「插件主页」→ 落在设置的默认视图；弹窗「设置」→ 落在设置视图；已开主页标签页时聚焦复用并导航到目标 view（非仅聚焦）。
+4. chrome:// 页面点图标 → 显示「只能收藏 http(s) 页面」，表单隐藏。
+5. 未配置实例时点图标 → 引导文案 + 「去设置」；配置保存后弹窗可正常收藏。
+6. 断网/错误凭据点图标 → 对应错误文案 + 重试按钮；412 冲突 → 自动重载并提示再点一次。
+7. 右键工具栏图标「切换插件主页默认视图」→ 通知正确、主页初始视图随之切换；右键页面「收藏此页到 Davflare」一键收藏不受影响。
+8. 明暗主题：弹窗跟随系统/主页主题设置。
+9. 快捷键（chrome://extensions/shortcuts 可改）按 Alt+Shift+S → 弹出收藏弹窗且预填当前页；在 openPopup 不可用的环境退化为通知式静默收藏。
+10. 地址栏输入 `df` + 空格 → 提示「搜索 Davflare 书签…」；输入已藏站点关键词 → 下拉出标题+标签+URL 建议，回车打开；`df 不存在的词` 回车 → 打开书签库页。
+
+## 0a-11. 扩展书签导入导出改为文件 + 收编 HamHome 入口（issue #65，2026-09-06）
+
+「导入」从 Chrome bookmarks API 改为文件优先（JSON/HTML），导出补 JSON 完整备份，HamHome 独立一级入口收进导入对话框。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 导入对话框 | 「⋯ 更多 → 导入」改为弹导入面板：主按钮「选择文件…（JSON / HTML）」走系统文件选择器（点不动问题闭环）；「从浏览器书签导入」（原一级行为，仍走 bookmarks 可选权限）与「从本实例 HamHomeSync 目录导入」（原独立 HamHome 一级按钮）收编为面板内次要选项；空态按钮从三收二（添加 / 导入） |
+| 格式识别 | `Bookmarks.sniffJsonImport` 按条目字段嗅探 JSON 归属（Davflare: folder/note/added/id；HamHome: categoryId/description/createdAt，裸数组也算 HamHome），`Bookmarks.importBackup` 统一入口吃 Davflare JSON / HamHome JSON（含内联 categories）/ Netscape HTML；`HamHome.importFrom` 支持直接传已解析对象 |
+| 导出对话框 | 「⋯ 更多 → 导出」弹导出面板：HTML（Netscape，浏览器可再导入）+ JSON（完整备份 davflare-bookmarks.json，含 folder/tags/note）；下载逻辑抽 `downloadText` 共用 |
+| 去重与文案 | 导入一律按 URL 合并去重（`mergeModels`），成功提示新增条数；解析失败/文件无书签分别有明确文案（importInvalid / importEmpty，显示在面板内） |
+
+### 待手动回归（Chrome 加载扩展）
+1. 「⋯ 更多 → 导入」弹面板；选 HamHome 导出的 meta.json（或含 categories 的合并 JSON）→ 提示导入条数，文件夹路径正确；选浏览器导出的 HTML → 导入成功。
+2. 重复导入同一文件 → 提示「没有需要导入的新书签」；选无关文件（乱码 JSON/无书签 HTML）→ 面板内明确报错。
+3. 「⋯ 更多 → 导出」分别下载 bookmarks.html 与 davflare-bookmarks.json；HTML 可被 Chrome 书签管理器再导入；JSON 重新导入后标签/备注/文件夹不丢。
+4. 侧栏「⋯ 更多」只剩导入/导出两项；空态只剩「添加 / 导入」；全 UI 无一级 HamHome 入口；导入面板内两个次要选项可用。
+
+## 0a-10. 扩展书签库 UI 打磨（issue #57，借鉴 HamHome 观感；2026-09-06）
+
+只动 UI/交互呈现，不动 WebDAV 同步协议。
+
+### 改动
+| 项 | 内容 |
+|----|------|
+| 空态（P0） | 结构化空态组件 `renderEmptyState`：内联 SVG 插画 + 标题/描述 + 按钮组。书签库空态带「添加 / 导入浏览器书签 / 从 HamHome 迁入」三按钮；筛选无结果带「清除筛选」（同时清空搜索词与时间范围）；工作区空态带「保存当前窗口」、Tab 分组空态带「按规则分组当前窗口」 |
+| 侧栏主次（P0） | 底部重排：主按钮「添加」独占一行 → 「⋯ 更多」菜单收纳导入/HamHome/导出 → 分隔线下「网盘 / 设置」弱化行（透明底灰字，hover 浅橙） |
+| 卡片（P0） | favicon 块 34→40px（_favicon 改请求 size=64 保 retina 清晰）、note 两行截断、标签芯片收窄（padding 1px 7px）；✎/✕ 换成右下角 ⋯ 菜单（编辑/快照/删除，快照项打开编辑弹窗并滚动到快照区） |
+| 导航选中态（P0） | 侧栏与顶部切换的 active 从整块实心橙改为浅橙底 + 深橙字，侧栏另加左侧 3px 指示条；count 徽标改纸底 |
+| 顶栏对齐（P0） | 搜索/两个 select/视图切换/主题按钮统一 36px 高、0.875rem 字号、10px 圆角 |
+| 列表密度（P1） | 行改为 favicon | 标题+域名（两行堆叠）| 分类+标签芯片 | 时间 | 操作，并补上标签列 |
+| 空占位（P1） | 空分类/空标签有专属标题 + 清除筛选引导 |
+| 暗色对比（P1） | 暗色 --bg 加深（#14110c）、--line 提亮（0.13），减少灰橙糊 |
+| 菜单基建 | `popMenu`/`menuToggle` 委托：document 级开合、点外关闭、aria-expanded；卡片 ⋯ 不经 iconButton（其 stopPropagation 会挡委托） |
+
+### 待手动回归（Chrome 加载扩展）
+1. 空库 → 空态插画 + 三个入口都能完成对应动作；筛选空态「清除筛选」复位搜索/分类/标签/时间。
+2. 侧栏：「添加」主按钮、「⋯ 更多」展开收纳项且点外收起、网盘/设置弱化行可切换视图。
+3. 卡片：大 favicon、有 note 的书签两行截断、⋯ 菜单三动作（编辑/快照/删除）正确；列表视图为列式布局且 hover 显示 ✎/✕。
+4. 导航选中态为浅橙+指示条；顶栏控件等高对齐；暗色模式下背景/卡片层次分明。
+
+## 0a-9. 扩展设置并入主页 + 删除 newtab 变体（2026-09-06）
+
+### 改动
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 设置视图 | 主页第 5 视图：options 表单（实例地址/书签目录/工具栏默认视图/凭据/测试连接）整体移植进 `#viewSettings`，样式作用域化适配明暗主题；`openOptions()`→`openSettings()`=`switchView("settings")`，全部 banner「打开设置」与 settingsBtn 统一入口 | ✅ extension.test 断言 shell 含 viewSettings/switchSettings/settingsForm 且无 openOptionsPage |
+| 首次配置 | boot 时无 instanceUrl → 强制 `switchView("settings")` + bannerSettings 引导；保存并授权后自动切到工具栏默认视图并 refresh | ✅ 全量 vitest 通过；待 GUI 手测 |
+| 删选项页 | manifest 删 `options_ui`；删 options.html/css/js | ✅ 测试断言文件不存在 + manifest 无 options_ui |
+| 删 newtab | 删 `extension-newtab/`、url.js 的 `resolveNewTabTarget`/`DEFAULT_NTP`；打包脚本单 zip（并断言 manifest 无 chrome_url_overrides/options_ui）；CI 只附一个 zip | ✅ zip 列表无 options/newtab 文件、含 drive/drive.js |
+| 路由 | `resolveToolbarTarget` 未配置 → `{action:"settings"}`；background 未配置 → `openLibraryPage("settings")`；ERROR_COPY.unauthorized 文案改指书签库设置 | ✅ toolbar helper 测试 options→settings |
+
+### 待手动回归（需要 Chrome 加载扩展）
+1. 全新配置（清空 storage）：打开扩展页直接落设置视图 → 填地址/凭据 → 保存 → 授权弹窗 → 自动进入网盘视图并正常列目录。
+2. 侧栏「设置」随时进入，改地址/凭据/默认视图，保存后行为立即生效；测试连接四种结果（ok/disabled/401/网络）文案正确。
+3. 未配置时点工具栏 → 打开书签库页设置视图（复用已开标签页逻辑）；各视图 banner「打开设置」跳转正常。
+4. 书签保存：右键「收藏此页」在配置完成后正常工作；412 冲突提示文案指向设置。
+5. newtab 变体移除后：Chrome 新标签页保持 Chrome 默认；旧的 newtab zip 用户需改装单包。
+
+### 已知影响
+- `chrome://extensions` 详情页的「扩展选项」入口消失（设置并入主页侧栏，属预期）。
+- 曾安装 newtab 变体的用户升级后新标签页覆盖自然消失（需重新加载单包）。
+
+## 0a-8. 扩展网盘视图：去 iframe，直接复用 Web 端 React 组件（2026-09-05）
+
+### 背景与方案
+实例 `_headers` 对全站下发 `X-Frame-Options: DENY`，扩展网盘视图的 iframe 被 Chrome 拒绝渲染（「拒绝了我们的连接请求」）。方案：不再嵌网页，把 Web 端 `<App/>` 整棵 React 树打进扩展，挂载到 `bookmarks.html` 的 `#driveRoot`（用户选定「改动最小」路线：整 App 挂载，不新写组合层）。
+
+### 改动
+| 项 | 内容 | 验证 |
+|----|------|------|
+| authFetch apiBase | `src/app/auth.tsx` 新增 `setApiBase()`（默认空串=现状），`authFetch` 对 `/` 开头字符串拼接 base；全站 API 与 AuthThumbnail 都走它，一处改动全通 | ✅ 新增 authApiBase.test 3 用例（拼接/绝对 URL/空 base 不变） |
+| 凭据镜像 | `src/extensionDrive/credentials.ts` 纯函数 + main.tsx 订阅：chrome.storage.local（davUsername/davPassword）↔ auth 模块 localStorage 双向镜像，挂载时 chrome.storage 权威覆盖（含清空） | ✅ credentials.test 4 用例；main.test 播种用例 |
+| 权限门 | `DriveGate`：`chrome.permissions.contains` 检查实例 origin，未授权显示授权卡片（`request` 需用户手势，放在按钮里）；授权后渲染 `<App/>`。原因：`/api/*` 无 CORS，必须 host 权限 | ✅ main.test 权限门 2 用例 |
+| 挂载桥 | `src/extensionDrive/main.tsx` 暴露 `window.DavflareDrive = { mount, reload }`；换实例强制重挂（清残留路由/列表）；reload=整树重挂 | ✅ main.test 4 用例（jsdom + chrome mock） |
+| 扩展壳 | `bookmarks.html` iframe→`#driveRoot` + `<script type="module" src="drive/drive.js">`；`bookmarksApp.js` loadDriveView 改调 mount，`DavflareDrive` 缺失时显示构建提示（保留「新标签页打开」兜底）；切走视图 React 保活；`.driveFrame` 加 overflow:hidden | ✅ 既有 9 个 extension vitest 全过 |
+| 构建管线 | `vite.extension.config.ts`（显式 TS 入口 + `publicDir:false` + inlineDynamicImports 单文件 `drive.js` ≈719KB/gzip 229KB）；`npm run build:extension`；`extension/drive/` 入 .gitignore；`package-extension.sh` zip 前构建；release workflow 加 `npm ci`；devDeps + `@types/chrome` | ✅ build:extension 产物仅 drive.js；打包脚本端到端跑通，zip 含 drive/drive.js |
+| 不改动项 | pdf.js CDN 动态 import：`processTransferTask` 调用点已有 try/catch，MV3 CSP 拦截时静默跳过缩略图不阻塞上传；`_headers` 的 DENY 保留（不再需要 iframe，且是合理安全默认） | ✅ 全量测试无回归 |
+
+### 待手动回归（需要 Chrome 加载扩展）
+1. `npm run build:extension` → 加载 `extension/` → 配置实例 → 网盘视图出现授权卡片 → 授权后 App 渲染、目录列出。
+2. 上传/下载/预览/重命名/删除/回收站/分享/全局搜索/传输管理在扩展内正常；`openFile` 的 `window.open(blob:)` 行为需实测（失败则降级下载）。
+3. 未构建状态加载源码目录：网盘视图显示构建提示，书签/工作区/Tab 分组不受影响。
+4. 扩展内登录/登出 → background 右键「收藏此页」仍能用同一份凭据（镜像生效）。
+5. 换实例地址后进网盘视图：旧实例目录状态不残留（强制重挂）。
+
+### 已知取舍
+- 扩展 zip 从 ~100KB 增至 ~830KB（React+MUI 打入）；网盘视图内自带 Web 顶栏与扩展侧栏并存。
+- 非 Davflare 纯 WebDAV 实例：网盘视图按 Davflare API 工作（与 iframe 时代一致），「新标签页打开」兜底。
+
+## 0a-7. 第三轮四批（2026-08-30）
+
+### 第 0 批：缺陷修复（commit 54a4acb）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| shareLinkRevoked 缺键 | SharesView 撤销分享 toast 显示原始键名，strings.ts 补 `shareLinkRevoked` 中英文 | ✅ strings 单测（双语完整性）通过 |
+| WebDavPanel 字面量 | `"{strings.notConfigured}"` 等带花括号原文渲染给用户，改为正常表达式 | ✅ typecheck + 构建 |
+| html lang 固定 | `<html lang>` 不随语言切换；setLang() 与模块初始化时同步 `document.documentElement.lang` | ✅ 构建 |
+| 暗色硬编码阴影 | 7 文件 10 处暖黑阴影改为 theme 感知 `warmShadow()`（亮色不变，暗色纯黑加深） | ✅ 构建 + 既有测试不回归 |
+
+### 第 1 批：Sites 管理后端（commit 8258836）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| /api/sites | 列站（delimiter）/配置（SPA 开关）/删站（分批 + purge 语义：默认保留配置）；统计聚合带 10 分钟 TTL 缓存 | ✅ e2e 18 项断言（列表/配置/统计/非法 slug/401/清空保留配置/purge 彻删） |
+| SPA/404 兜底 | 中间件最终 miss 才读一次配置：spa→index.html 200；否则 404.html 以 404 返回；正常命中零额外 R2 读 | ✅ e2e：miss 404 / spa 200 / 404.html 404+内容 / 重部署后 SPA 仍生效 |
+
+### 第 2 批：SitesView 界面（commit 370cf8b）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 站点区块 | `#/sites` 第四 section + ExplorerBar 切换；卡片（slug/静态 SPA 徽标/URL 复制/懒加载统计）；SITES_HOST 未配置引导横幅 | ✅ 浏览器 GUI 冒烟（截图核验布局与主题一致性） |
+| zip 一键部署 | 前端 fflate 解压 → 注入 webkitRelativePath → 复用上传队列（覆盖语义/清空可选项/进度暂停重试全套） | ✅ GUI：部署对话框渲染、未选文件禁用部署按钮；「管理文件」跳转 `sites/<slug>/` 复用文件管理器 |
+| SPA 开关即时生效 | 开关 optimistic 更新 + 服务端 POST 配置 | ✅ GUI：开关后徽标变 SPA + toast；TEST_CASES 新增 TC-SITES 12 例 |
+
+### 第 3 批：MCP 深化（commit f089ff9）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 新端点 | `POST /api/copy`（复用抽取的 copyObject，rename 行为不变）、`GET /api/stat`、`/api/download` 支持 Range（206 + Content-Range，非法 Range 回退全量） | ✅ e2e：copy/stat 成功路径 + 2MB 下载逐字节 cmp |
+| MCP 十新工具 | search/move/copy/stat/share_create/share_list/share_revoke/sites_list/sites_config/sites_delete（_mcp.ts 保持纯函数） | ✅ mcp 单测 15→23 用例（工具目录/参数转发/分块编排）；e2e tools/list 计数与调用 |
+| 大文件分块 | MCP upload >1MiB 自动三段式（cap 25MB），分块失败 abort 清理；download 大文件按 part/partSize 分页 base64 | ✅ e2e：2MB base64 上传 → /api/download 逐字节一致 → part 分页与原文件前 1MiB 一致 |
+| 鉴权统一 | /api/shares、/api/search、/api/sites 放行 API key（会话仍可用） | ✅ e2e：三端点 Bearer key 创建/搜索/列站；无 key 401 |
+| 文档 | docs/API.md（copy/stat/search/Range/MCP 工具清单/shares 密钥说明）、docs/sites(.zh-CN).md 管理 API 章节 | ✅ 与实现核对 |
+
+### 第 4 批：davflare-cli（本次提交）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| cli 包 | 独立 npm 包 `davflare-cli`（Node ≥18 + commander，ESM + tsc + vitest）；login 创建专用密钥存 `~/.config/davflare/config.json`(0600)；DAVFLARE_SERVER/KEY 环境变量 | ✅ 构建 + `--help/--version` |
+| 命令 | ls/ln -l/--json、mkdir、rm -r/--hard、mv、cp 双向（>100MB 自动分块上传、Range 断点续传下载）、sync push/pull --dry-run/--delete/--backup-conflicts | ✅ cli/e2e.sh 17 项断言全过（上传/下载字节一致/mv/rm/sync 双向幂等/清理） |
+| sync 引擎 | 纯函数 planSync（transfer/changed/deleteCandidates/upToDate），local wins（push）与 remote wins（pull） | ✅ vitest 4 用例（push/pull/空表/同 size 一致） |
+
+### 排障记录（本轮真实故障，值得留档）
+| 现象 | 根因 | 处置 |
+|------|------|------|
+| e2e 站点断言全挂，响应是网盘 SPA 页 | 8788 端口有残留 wrangler dev（早前会话遗留），测试打到旧进程 | 测试前确认端口空闲；换端口运行 |
+| MCP stat 间歇性「文件不存在」 | 多个 wrangler dev 共享同一 `.wrangler/state` SQLite，workerd 间 SQLITE_BUSY 争锁（日志可见 Fatal ... SQLITE_BUSY） | 只保留一个 dev 实例；多实例需各自 --persist-to |
+| MCP 上传响应 -32700 Parse error、参数被截断 | e2e 里 `$( )` 内嵌 `\"` 构造 JSON 参数：不在引号内的 $( ) 中 `\"` 使引号开关，`{a,b}` 形状触发 **bash 花括号展开**按逗号拆参 | JSON 参数先拼进变量再传（mcp_call 调用约定已加注释警示） |
+| CLI 上传 400「需要 X-File-Name」 | /api/upload 原始体模式要求 path=目录 + X-File-Name=文件名；客户端误传完整键 | client.uploadFile 拆分 folder/name |
+| CLI ls --json 断言失败 | CLI 美化输出 `"name": "a.txt"`（带空格），grep 写成无空格 | e2e grep 对齐实际输出 |
+
+**本轮验证汇总**：`npm run typecheck` 0 错误；`npm run test:ci` 8 套件 76 用例全过；`npm run build` 成功；主 e2e `npm run test:e2e` **129 项断言全过**（含站点 18 项 + MCP 20 项）；`cli` vitest 4 用例 + `cli/e2e.sh` **17 项全过**；SitesView 浏览器 GUI 冒烟通过。
+
+
+## 0a-6. 第六批新增与新验证（2026-08-29）
+
+### 缺陷修复
+| 项 | 内容 | 验证 |
+|----|------|------|
+| i18n 快照 bug | ExplorerBar `TYPE_FILTERS` 与 FileActionSheet `ACTIONS` 在模块加载时固化文案，切语言后类型筛选 Chip / 右键菜单不跟随。改为常量存 key、渲染时经 strings 取值 | ✅ 代码核验 + 切换语言即时生效 |
+| Backspace 误删 | 网格按 Backspace 原本直接弹「移入回收站」确认（破坏性风险）。改为 Backspace = 返回上级目录（根目录无操作），Delete 才删除 | ✅ e2e 之外人工核验代码路径；TEST_CASES 新增 KB-12 |
+| 虚拟目录软删 404 | 仅前缀无 marker 的目录硬删成功但 `soft=1` 返回 404。`softDeleteKeys` 现按「head 为空但有后代」识别虚拟目录，记 `virtualDir` 元数据 | ✅ 单元逻辑核验；restore 补建 marker 见下条 |
+| restore 父级 marker | 回收站还原不重建原路径父级目录 marker；还原后逐级 `ensureFolderMarkers` 补建，虚拟目录本体 marker 也补上 | ✅ e2e：软删 deep 目录 → 硬删整树 → restore → 文件原位可列出（4 项断言） |
+| 目录判定不统一 | `shares.ts` 只认 contentType，改用 `_apikey.isCollectionObject`（contentType 或 resourcetype 均可）；`share/[[token]].ts` HEAD 对目录分享返回 200 application/zip（与 GET 一致）并补过期 410 | ✅ e2e：目录分享 HEAD 200|application/zip；文件/目录/提取码分享 12 项断言 |
+| upload.ts 鉴权去重 | 删除整段复制的鉴权代码（约 90 行），复用 `_apikey.authorizeApiKey/touchLastUsed/isInternalKey`；complete 前补 parts 升序校验 | ✅ e2e 全量 79 项断言通过（上传/分块行为不变） |
+| trashKey 命名 | `DELETE /api/delete?soft=1` 响应 `trashId` 与回收站列表 `trashKey` 不一致，统一为 `trashKey`（与 restore 参数直接对齐） | ✅ e2e 断言 `"trashKey"` 字段 |
+| 统计胶囊缓存 | `listingStats` 的 useMemo 缓存了翻译结果，切英文后仍显示「N 个文件夹」。useMemo 加 lang 依赖 | ✅ GUI：切英文后显示 "5 folder(s) · 0 file(s) · 0 B" |
+| TextPad 假 key | 记事本使用字典中不存在的 `fileName`/`notePlaceholder`，Proxy 兜底把 key 名原样显示。补 `fileName`/`noteContent` 两个 key 并改接线 | ✅ GUI：记事本标签正常显示 |
+
+### 半成品收尾（B5 / B9 / C9）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| B5 通知队列 | Snackbar 队列化（上一条退出后再弹下一条，连续错误不再互相覆盖）；error 默认 8s；上传失败 toast 带「上传任务」入口；删除/移动/拖拽移动失败 toast 带「重试」action | ✅ 构建 + 代码核验；TEST_CASES 新增 KB-13/14 |
+| B9 预览增强 | 图片预览：滚轮缩放 25%-400%（非被动监听）、双击 100%/250% 切换、按住拖拽平移（pointer capture）、旋转 90°/270° 自动计算补偿系数防溢出、操作栏显示当前百分比（点击复位） | ✅ 构建 + tsc；TEST_CASES 新增 PV-13/14 |
+| C9 棋盘格 | 缩略图（AuthThumbnail）补透明 PNG 棋盘格衬底，与预览大图一致（亮暗双套） | ✅ TEST_CASES 新增 PV-15 |
+
+### i18n 第二阶段全量收编
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 文案收编 | src 下（strings.ts 除外）硬编码中文清零：app/ 工具模块全部错误消息（transfer/share/trash/transferQueue/apikeys 的 throw）、utils 时间与 ETA 文案、ShareDialog 有效期标签 | ✅ 扫描脚本核验 0 残留；`translate` 单测覆盖 |
+| curl 指南双语 | `formatApiUsage` 改为 zh/en 双语行模板（按 getLang() 取用），英文全文翻译 | ✅ tsc + 构建 |
+| 防漏译护栏 | strings.ts 暴露 `dictionary`；单测遍历断言每个 key 的 zh/en 均非空 | ✅ 单测 |
+
+### 界面美化
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 顶栏毛玻璃 | 滚动后半透明纸色 + backdrop-filter blur（不支持时 @supports 回退纯色）；Header 裸 zIndex 收进 Z_INDEX 常量 | ✅ 构建 |
+| 空状态差异化 | EmptyState 增加 variant（folder/search/trash/shares），四种场景圆底色调/卡片倾角/圆点排布区分 | ✅ 四处调用点接线 |
+| 选中态统一 | 网格卡片与列表行选中统一叠加柔和呼吸光效（2.4s 脉动，prefers-reduced-motion 禁用） | ✅ 构建 |
+
+### 测试基建（从零到一）
+| 项 | 内容 | 验证 |
+|----|------|------|
+| Jest 单测 | 首批 5 个测试套件 43 项：strings（字典完整性/插值/持久化/订阅）、route（hash 解析/编码/hashchange）、utils（尺寸/ETA/相对时间/去重/垃圾文件）、highlight（三族 tokenizer/按行拆分）、transferQueue（并发 2/失败自动重试 1 次/暂停恢复/取消清理） | ✅ `npm run test:ci` 43/43 |
+| e2e 一键化 | `scripts/run-e2e.sh` + `npm run test:e2e`：自动生成 .dev.vars → 构建（SKIP_BUILD=1 可跳）→ wrangler pages dev → 就绪轮询 → api-e2e.sh → trap 清理 | ✅ 本地全流程 |
+| e2e 扩容 | api-e2e.sh 48 → 79 项断言：新增 config、search（命中+空+401）、分享（文件/目录 zip 树/提取码 200-403/撤销 404/HEAD zip）、回收站还原（含父级 marker 补建）、archive（zip 内容校验/401）、WebDAV MKCOL/COPY/LOCK | ✅ 本地 79/79 全过 |
+| 脚本 | package.json 增 `test:ci` / `typecheck` / `test:e2e` | ✅ |
+
+### 本轮已知限制
+- 虚拟目录（无 marker）软删的 e2e 直接构造需要 R2 层操作（公开 API 建不出这种目录），实现已防御性支持，留待需要时用 miniflare API 补用例。
+- 预览缩放/平移的 GUI 自动化未跑（滚轮/拖拽手势），人工按 PV-13/14 走查即可。
+
+## 0a-5. 第五批新增与新验证（2026-08-29）
+
+| 项 | 内容 | 验证 |
+|----|------|------|
+| 测试沉淀 | `scripts/api-e2e.sh`：开放 API + WebDAV 的 48 项断言回归套件（参数化 BASE/凭据，自建前缀 + 自动清理），补入 backup 用独立文件的顺序修正 | ✅ 本地 48/48 全过（可重复执行） |
+| A9 i18n（第一阶段） | 双语字典 + Proxy strings（现有 `strings.xxx` 用法零改动生效）+ `translate(key, params)` 参数化模板 + localStorage/navigator.language 检测 + Header 语言切换按钮（中文/English）+ App 根订阅语言切换触发整树重渲染；核心界面文案收编（登录/页头/工具栏/统计胶囊/上传队列状态与按钮/删除确认/通知 toast/预览过大/空状态） | ✅ GUI：切英文全界面生效（截图）、`flaredrive.lang` 持久化、刷新保持、回切中文正常 |
+
+说明：i18n 第二阶段（TrashView/SharesView/WebDavPanel/ApiKeysPanel/TextPadDrawer 等专业面板的剩余硬编码 + 英文润色）待后续；未迁移文案在英文界面下仍显示中文原文，不影响功能。
+
+## 0a-4. 第四批新增与新验证（2026-08-29）
+
+| 项 | 内容 | 验证 |
+|----|------|------|
+| B8 | 多选拖拽整组移动：多选后拖动任一选中项 = 整组剪切到目标文件夹（dataTransfer 载荷为 JSON 数组，兼容旧单键格式；目标自身/子项自动过滤） | ✅ GUI：Ctrl+Click 选 2 项 → 合成 dragstart 载荷为整组 → drop 后 PROPFIND 目标目录两项都在 |
+| B7 | 面包屑同级下拉：路径栏新增 ▾ 按钮，列出父目录下全部子文件夹（当前项高亮），点击跳转 | ✅ GUI：根下一层与深层目录均正确列出同级；点击 target-dir 成功跳转。验证中修复：单层目录 parentPath 误算为 "/" 导致 PROPFIND 404 |
+| C4 | 缩略图 hover 微缩放（scale 1.06，reduced-motion 禁用） | ✅ 构建渲染无回归（CSS 动效） |
+| C8 | 文件图标扩展：演示文稿（ppt/pptx/key/odp 橙红）、电子书（epub/mobi/azw3 绿）、字体（ttf/otf/woff 紫） | ✅ GUI：三类文件图标与配色正确 |
+
+## 0a. 第三批新增与新验证（2026-08-29）
+
+| 项 | 内容 | 验证 |
+|----|------|------|
+| A6 | 目录分享：分享链接访问时打包整树 zip 流（条目相对分享目录），提取码/过期/撤销沿用 | ✅ curl：isDir 字段、提取码表单 200/错误 403/正确 200、zip 树与内容逐字节一致、文件分享回归无损；GUI：目录右键菜单出现「分享」→ 创建成功 |
+| A7 | 回收站惰性过期清理：`TRASH_RETENTION_DAYS`（默认 30，0=全部过期，-1=关闭），打开回收站时清理，每批 ≤200 | ✅ curl：0 天配置下软删项下次打开即清空；默认 30 天下软删项正常可见 |
+| A8 | 搜索命中高亮（文件名拆分渲染，主色加粗，React 文本转义防 XSS） | ✅ GUI：搜「demo」三个文件名命中片段橙色高亮 |
+| B6 | 网格卡片 hover/focus 快捷操作条（下载/分享/删除；触屏隐藏） | ✅ GUI：hover 显示 opacity=1 + 三按钮，分享按钮直达对话框 |
+| B9 | 预览增强：图片旋转 90°（按钮累计）、视频倍速循环（1/1.5/2/0.5） | ✅ GUI：transform rotate(180deg) 两次生效；倍速按钮渲染（视频流播放本地无素材验证 UI） |
+| B10 | 日期相对化：24h 内「刚刚/N 分钟前」，更早回退日期，tooltip 绝对时间 | ✅ GUI：新上传显示「刚刚」 |
+| C2 | 空状态分层浮动画风（暖橙圆底+倾斜卡片+悬浮图标卡+圆点，亮暗自适应，reduced-motion 禁用） | ✅ GUI：空目录截图核验 |
+| C3 | 网格/列表项进入动效（stagger ≤24 项，prefers-reduced-motion 禁用） | ✅ 构建与渲染无回归 |
+| C5 | 顶栏滚动阴影（内容滚动 >8px 出现，回顶消失） | ✅ GUI：滚动前 none → 滚动后阴影 |
+| C6 | 移动端底部导航：文件页高亮、点按图标弹跳（reduced-motion 禁用）、上传 tab 环形总进度 | ✅ 构建通过；动效为 CSS 侧，逻辑 props 接线完成 |
+| C9 | 透明图片棋盘格衬底（亮暗双色格） | ✅ GUI：透明 PNG 预览棋盘格清晰可见 |
+
+本轮无新增缺陷修复；目录分享曾发现两处缺口并在验证中当场修复：① zip 条目使用全 key 路径 → 加 stripPrefix 相对化；② 目录右键菜单缺「分享」项（filesOnly 遗留）→ 放开。
+
+## 0. 本轮（第二批）新增与新验证
+
+### 新落地功能
+| 项 | 内容 | 验证 |
+|----|------|------|
+| A1 | 开放接口目录级 rename（递归移动）/ delete（递归删除）/ backup（整树改名 `.conflict-<戳>`），上限 1000 对象 | ✅ curl：目录改名子项跟随、删目录后 404、子路径改名 400、目录 backup 名正确 |
+| A2 | `DELETE /api/delete?soft=1` 软删除（文件+目录，进回收站可还原） | ✅ curl：trashId 返回、回收站可见、restore 后内容一致 |
+| A4 | `GET /api/list?limit=&cursor=` 分页 | ✅ curl：5 条 limit=2 三页取尽无重复；limit=0/1001 拒绝 |
+| A5 | 开放接口分块上传 `?uploads` → PUT part → complete / abort | ✅ curl：5MiB+小块拼装逐字节一致、abort 后 complete 400、partNumber=0 拒绝。注意 R2 限制：除末块外每块 ≥5MiB（错误信息透传） |
+| A3 | 文件夹计数真实化（惰性并发补数 + sessionStorage 缓存） | ✅ GUI：bulk 105 项 / empty-dir 0 项 / 子目录甲 2 项 |
+| B1 | 键盘增强：F2 支持目录、Home/End、Shift+Click 范围选、Ctrl/Cmd+Click 选、修饰键点击不触发打开 | ✅ GUI：End 聚焦末项、F2 弹目录重命名（预填 bulk）|
+| B2 | 删除可撤销（toast「撤销」7 秒） | ✅ GUI：删除→撤销→文件原位恢复 |
+| B3 | 上传队列：速度/ETA 显示、全部暂停/继续、失败自动重试 1 次 | ✅ 按钮/文案渲染；持续速率本地瞬时完成无法观察（环境受限，见未覆盖） |
+| B4 | 全盘搜索触底自动加载 + 「已全部加载」 | ✅ GUI：181→滚动→223 条+已全部加载 |
+| B5 | 错误 Snackbar 带重试（列目录/重命名/粘贴） | ✅ 基建接入；断网场景未本地模拟 |
+| C1 | 代码预览语法高亮（json/clike/hash 注释族，≤1MB） | ✅ GUI：js 关键字紫/字符串绿/注释灰/数字橙，暗色配色独立；JSON 格式化+高亮 |
+| C7 | 对比度审计 + z-index 收敛 | ✅ 7 项文本 token 对比度 4.79–15.72:1 全过 WCAG AA；z-index 常量化 |
+
+### 本轮发现并修复的真实缺陷
+1. **预览重开 412**（严重，历史遗留）：浏览器第二次 GET 同一文件带 `If-None-Match` 缓存再验证，WebDAV GET 把它透传给 R2 `onlyIf` 得到 412「打开文件失败」。修复：`protocol.ts` 对 If-None-Match 命中返回 **304**（curl 验证 304/200 双路径）。
+2. **全盘搜索丢结果**（严重，历史遗留）：凑满 limit 立即截断，同页剩余命中被丢弃且桶 ≤1000 对象时无 cursor 可翻页（实测 102 命中只返回 100 且 hasMore=false）。修复：固定 100/页步长扫完当前页再截断。
+3. **复选框聚焦吞键盘**：isTypingTarget 把 checkbox 当文本输入，Delete/方向键失效。修复：checkbox/radio/button 不再视为输入目标。
+4. **Snackbar action 不渲染**：MUI Snackbar 有 children（Alert）时 action prop 不生效，改挂 Alert 的 action prop。
+
+## 1. 本地环境搭建
+
+```bash
+npm install
+
+# 根目录创建 .dev.vars（已被 .gitignore 忽略，本地凭证不入库）
+echo 'WEBDAV_USERNAME=admin' >> .dev.vars
+echo 'WEBDAV_PASSWORD=你的密码' >> .dev.vars
+
+npm run build                      # Vite 构建到 build/（先 tsc --noEmit 类型检查）
+npx wrangler pages dev build       # http://localhost:8788，前端 + functions + 本地模拟 R2
+```
+
+- 本地 R2 数据落在 `.wrangler/state/`（miniflare 模拟，无需真实 Cloudflare 凭证；删除该目录即全部重置）。
+- API 测试可先经 UI（「API」面板）创建密钥，或用 Basic 认证调 `POST /api/keys`。
+- 建议把所有测试数据放在一个自建前缀目录下（如 `fd-e2e-<日期>/`），测完 WebDAV `DELETE` 整目录 + 清空回收站 + 作废密钥。
+
+## 2. 回归矩阵（2026-08-29 结果）
+
+### 浏览器 GUI（Chrome / IAB，1280×720 与 390×720）
+
+| # | 用例 | 结果 | 备注 |
+|---|------|------|------|
+| 1 | 登录：错误密码拒绝 / 正确密码进入 | ✅ | 错误提示「用户名或密码错误」 |
+| 2 | 新建文件夹 + toast + 统计更新 | ✅ | |
+| 3 | 目录导航：进入 / 面包屑 / 返回上级 | ✅ | 搜索范围随目录自动切换 |
+| 4 | 记事本创建文本文件并上传 | ✅ | 上传队列 toast + 列表刷新 |
+| 5 | 拖拽上传（合成 DataTransfer drop） | ✅ | 触发上传管线与缩略图生成 |
+| 6 | 缩略图显示（私有模式，Basic 认证） | ✅ | **本轮修复**：AuthThumbnail 经 authFetch 取 blob |
+| 7 | 暗色模式：切换 + 刷新持久化 | ✅ | **本轮新增**：浅色/深色/跟随系统 |
+| 8 | 键盘导航：方向键移动焦点 | ✅ | **本轮新增**：焦点描边 + scrollIntoView |
+| 9 | 键盘：Space 选中 / Ctrl+A 全选 | ✅ | 多选工具栏联动 |
+| 10 | 键盘：F2 重命名 / Enter 打开 / Delete 软删 | ✅ | Delete 弹「移入回收站」确认框 |
+| 11 | 键盘：Esc 清除选择与焦点 | ✅ | |
+| 12 | 预览：文本（行号/分页）/ 图片 / 左右切换 | ✅ | 「70.2 KB · 1/2」指示 |
+| 13 | 重命名（对话框）| ✅ | |
+| 14 | 剪切 → 进入子目录 → 粘贴移动 | ✅ | 工具栏出现「粘贴 1 项」 |
+| 15 | 软删除 → 回收站 → 恢复 | ✅ | 恢复后原路径出现 |
+| 16 | 类型筛选（图片）| ✅ | |
+| 17 | 网格/列表视图切换 | ✅ | 列表粘性表头、文件夹计数「1 项」 |
+| 18 | 排序：名称升降序（目录恒优先）| ✅ | |
+| 19 | 搜索：当前文件夹过滤 / 全盘搜索 | ✅ | 子目录文件在当前目录范围不出现，全盘可搜到 |
+| 20 | 分享：创建（提取码）/ 错误码拒绝 / 正确码展示 / 撤销 | ✅ | `/share/<token>` 独立页 |
+| 21 | API 面板：GUI 创建密钥（明文仅显示一次）/ 调用说明 | ✅ | 说明已含 `/api/mkdir` |
+| 22 | 移动端 390px：底部导航 / 两列网格 / 顶栏收缩 | ✅ | |
+| 23 | 浅色模式视觉回归（改动后）| ✅ | 与深色双模式截图核验 |
+
+### 开放 API（curl，密钥鉴权）
+
+| # | 用例 | 结果 |
+|---|------|------|
+| A1 | `POST /api/upload`（multipart 与 X-File-Name 原始体）| ✅ 201 |
+| A2 | `GET /api/list`（size/uploaded/etag、目录优先）| ✅ 200 |
+| A3 | `GET /api/download`（内容一致、中文不乱码）| ✅ 200 |
+| A4 | `POST /api/rename`（成功 / to 冲突 409 / 不存在 404）| ✅ |
+| A5 | `DELETE /api/delete`（成功 / 目录拒绝）| ✅ |
+| A6 | `POST /api/backup`（conflict 时间戳改名）| ✅ |
+| A7 | **`POST /api/mkdir`（本轮新增）**：创建 201 / 幂等 200 / 父级自动补建 / 同名文件 409 / 内部前缀 400 / `..` 穿越拒绝 / 无密钥 401 | ✅ |
+| A8 | `GET /api/search`（子串匹配）| ✅ |
+
+### WebDAV（curl，Basic 鉴权）
+
+| # | 用例 | 结果 |
+|---|------|------|
+| W1 | PROPFIND Depth 1（207）/ 错误密码 401 | ✅ |
+| W2 | MKCOL 201 / PUT 201 / GET 200 / MOVE 201 / DELETE 204 | ✅ |
+
+## 3. 本轮未覆盖项
+
+- 文件选择器与系统拖拽上传的 GUI 路径（IAB 自动化不支持 file chooser）；已用合成 drop 事件与记事本路径覆盖上传管线，API 上传另行 curl 验证。
+- **上传速率/ETA 与传输中「全部暂停」的实际效果**：本地 miniflare 吞吐即时（6MB 瞬间完成），按钮渲染与状态机已验证，持续传输表现需真实网络环境观察。
+- B5 重试按钮的断网触发：需网络故障注入，本地未模拟（代码路径已接入列目录/重命名/粘贴三处）。
+- 分享过期（410）与 `WEBDAV_PUBLIC_READ=1` 分支：需要时间/配置切换，未跑。
+- 视频倍速对真实视频流的播放效果：本地无视频素材，按钮与 playbackRate 设置逻辑已接。
+- IAB 嵌入环境的 IntersectionObserver / requestAnimationFrame 不触发回调（原生自检确认），B4 已加 scroll 捕获兜底；普通浏览器主路径仍为 IO。
+- cua 合成按键在部分焦点状态下不可达（checkbox 聚焦时），改用合成 KeyboardEvent 验证；真实键盘事件走 window 监听不受影响。
+
+## 4. 已知问题 / 后续建议
+
+- 大目录（数千项）无虚拟滚动，PROPFIND 全量渲染可能卡顿；搜索结果 200+ 条渲染已可感知变慢。
+- 弱验证项：B5 断网重试、视频倍速真实流、上传速率真实网络表现（见第 3 节）。
+- `formatRelativeDateTime` 非响应式：页面长开时「刚刚」不会自动变「N 分钟前」（重渲染后正确）。
+- 单测覆盖为首批基线（纯函数 + 上传队列状态机）；functions/ 端点继续由 e2e 覆盖，后续可考虑 vitest 直测 Workers 代码。
+- ~~`npm test`（CRA Jest）当前无任何测试用例~~ 第六批已落地 43 项单测与 `npm run test:e2e` 一键回归。
+
+## 分享管理升级 + 分享落地页（第四轮 B4/B5，2026-09-04）
+
+| 项 | 内容 | 验证 |
+|----|------|------|
+| C3 分享管理升级（前端） | SharesView 卡片与 ShareDialog 列表项新增二维码（qrcode 前端 toDataURL → dataURL，Popover 弹层「扫码访问/Scan to open」，新组件 `src/ShareQrButton.tsx`）；过期倒计时 Chip（纯函数 `shareExpiryView`/`formatShareCountdown`：>48h 天 / 2-48h 小时 / <2h 分钟，<24h warning 色，永久显示「永久有效」，已过期标「已过期」）；创建时间 Chip（相对时间 + tooltip 绝对时间，参考 FileGrid 写法；旧记录无 createdAt 不显示，`ShareInfo.createdAt` 改可选） | ✅ Jest 新增 14 用例：倒计时纯函数四象限（>=48h / 2-48h / <2h / 永久 + 过期/24h 分界/英文插值）、SharesView/ShareDialog 徽标与二维码弹层渲染断言；全量 53 套件 463 用例全绿 |
+| A1 分享落地页（后端） | `GET /share/<token>` 默认返回零脚本 SSR 落地页（文件名/类型/大小/分享时间 + 下载按钮，暖纸色调 + `prefers-color-scheme` 暗色双套，`Accept-Language` 含 zh → 中文否则英文，全插值 escapeHtml）；提取码表单复用同套视觉（校验逻辑/参数不动）；`?download=1` 固定 attachment 直链下载（目录仍 zip 流）；`?raw=1` 内联返回（可预览类型 inline，其余回退 attachment），`CSP sandbox`/`nosniff`/no-store/Range 全保留；落地页预览 src 指向 `?raw=1` 并继承 `?code=`，cookie 门禁对 img/iframe 子请求天然生效；HEAD 与 GET 语义对齐（默认 text/html，?download/?raw 返回对象元数据） | ✅ e2e 分享 section 18 → 39 项断言全过：落地页中英文/文件名/下载链接/HEAD、download=1 字节与 attachment、raw=1 200+inline+sandbox+nosniff、图片分享 `<img>` 预览、目录 zip（改走 ?download=1）与 HEAD、**410 过期（expiresInHours 小数 0.00001 制造）**、撤销 404（落地页+download 双路）、提取码 200/403/303/cookie 解锁/raw 预览 |
+| 分享记录 createdAt | 复查 `functions/api/shares.ts` 创建时已写入 createdAt（ISO），本批仅把 `ShareInfo.createdAt` 类型改可选以兼容旧记录 | ✅ tsc 0 错误 |
+| 文档 | README(.zh-CN).md 功能列表与分享链接行为说明（默认落地页 / ?download=1 直链 / ?raw=1 内联）、docs/API(.zh-CN).md Shares 端点行为重写、e2e 断言计数更新（79 → ~170） | ✅ 与实现逐条核对 |
+
+**本批验证汇总**：`npx tsc --noEmit` 0 错误；`CI=true npx react-scripts test --watchAll=false` **53 套件 463 用例全绿**（基线 449 + 14）；`npm run build` 成功；`SKIP_BUILD=1 bash scripts/run-e2e.sh` **171 项断言全过（0 FAIL）**。取舍说明：`?raw=1` 对非可预览类型（octet-stream 等）回退 attachment 而非强行 inline；过期分享的 Chip 显示「已过期」并用 warning 色；落地页不展示有效期信息（规格未要求，避免泄露多余元数据）。
+
+## 测试覆盖率体系与后端直测（第四轮 C 组，2026-09-05）
+
+| 批 | 内容 | 结果 |
+|----|------|------|
+| 测试基础设施 | 新增 `src/app/testUtils.ts`（jsonResponse/AsAuthFetchMock/clearStorage/PROPFIND XML fixture/MCP rpc 构造器，12 个测试文件去重改造）；package.json jest 配置 `collectCoverageFrom` 纳入 `functions/**`（`src/index.js`、testUtils、InMemoryBucket 排除）；新增 `functionsLoader.test.ts` 强制加载全部 functions 模块绕过 CRA jest roots 限制；coverageThreshold 按「实测-0.5」棘轮（src / functions / global 三组路径键，注意 jest 阈值 glob 键是逐文件校验、路径键才是分组聚合）；cli 加 `test:coverage`（v8 provider）与 vitest.config.ts | ✅ src 组阈值 91.6/84.5/85.9/93.5（stmts/branch/funcs/lines），functions 组 58.67/53.23/66.69/60.92 |
+| CI 工作流 | `.github/workflows/ci.yml`：push main + 全 PR，三 job——frontend（npm ci → typecheck → test:ci → build）、cli（npm ci → npm test，独立 lockfile 缓存）、e2e（`npm install --no-save wrangler@4` 钉版本后跑 `npm run test:e2e`，本地完整预演通过） | ✅ 本地预演 171 断言全过 |
+| cli 补测 | client.ts（>100MB 三段式真实临时文件分块、分块失败 abort 清理、Range 断点续传 206/200/等长跳过/偏大重下、ApiError 文本回退、createKeyWithSession/revokeKey）、config.ts（XDG 临时目录注入、0600 权限、环境变量覆盖/合并、损坏文件）、util.ts 全覆盖、index.ts（commander 分发 + 错误路径） | ✅ cli 6 文件 58 用例全绿；stmts 86.11% / branch 90.09%，client.ts lines 98.56%、config.ts 100% |
+| 后端直测 | 新增 `src/app/testInMemoryBucket.ts`：R2Bucket 内存模拟（get/put/delete/head 含 onlyIf 条件语义、list 忠实模拟 prefix/cursor/delimiter/include/UTF-8 字典序/truncated、multipart 全生命周期）；新增 5 个测试套件 185 用例：webdavProtocol（84：304/206/412/423/LOCK 互斥与刷新/Overwrite/内部前缀/鉴权 fail-closed）、trashApi（25：marker/虚拟目录/父级重建/惰性过期）、shareToken（32：落地页转义/download/raw 安全头/提取码 cookie/410/404）、uploadApi（20：413/乱序/缺块/abort 幂等）、middleware（24：SPA/404.html/穿越/Host 接管） | ✅ **functions/ 覆盖率 lines 18.75% → 61.42%、branches 53.73%**；protocol.ts 80.16%、trash 98.05%、shares 96.55%、share token 92.86%、upload 92.82%、middleware 97.62% |
+| 顺手修的两个后端健壮性 bug | ① protocol.ts handleGet 未捕获 R2 InvalidRange → 非法 Range 500（现回退全量 200，与 download.ts 同类处理一致）；② trash.ts handleRestore 对损坏元数据 JSON 无 try/catch → 整个还原 500（现返回结构化「回收站项目损坏」） | ✅ 各有用例固化 |
+| 前端洼地补测 | 新增 5 套件 104 用例：hooksExtra（30：快捷键全分支/多选 shift/拖拽遮罩/粘贴上传）、transferMultipart（28：分块/断点续传/AbortError 时序/缩略图副作用）、PreviewDialogExtra（13：缩放钳制/平移/旋转补偿/倍速/pager）、AppExtra（10：队列顶替/去重/主题三态）、MainExtra（23：加载更多/undo 闭环/拖拽入文件夹） | ✅ **src/ lines 84.94 → 94.01%、branches 75.88 → 85.04%**；useKeyboardShortcuts/useMultiSelect/useUploadInputs/useDragDropUpload/usePasteUpload 全部 100% lines |
+| 顺手修的两个前端交互 bug | ① useMultiSelect shift 范围选择失效（setState updater 延迟求值期间 selectionAnchor 已被覆写为点击目标，退化为「原选中+目标」→ updater 前捕获 anchor）；② App Snackbar 队列重开竞态（退场完成前 effect 重开，onExited 永不触发，消息每轮 autoHideDuration 重闪 → shownSnackKeyRef 挡住已展示消息的重开） | ✅ jsdom 复现→修复→回归，AppExtra 断言「12s 后消失且不再重闪」 |
+
+**本批验证汇总**：`npx tsc --noEmit` 0 错误；`CI=true npx react-scripts test --watchAll=false` **64 套件 754 用例全绿**（基线 53/463 → +11 套件/+291 用例）；`npm run build` 成功；`SKIP_BUILD=1 bash scripts/run-e2e.sh` **171 断言全过（0 FAIL）**；cli `npm test` 58 用例全绿。已知环境限制：upload.ts 的 multipart/form-data 分支在 whatwg-fetch 测试环境无法解析 multipart 请求体（e2e 兜底）；protocol.ts handlePutMultipart 对未知 uploadId 的 part PUT 未捕获（边缘，已记录）。
+
+## 现代化批次：CRA → Vite + Jest → Vitest + MUI v5 → v7（2026-09-05）
+
+| 改动 | 内容 | 验证 |
+| --- | --- | --- |
+| 构建迁移 | 移除 react-scripts（连带 @babel/plugin-proposal-private-property-in-object、eslintConfig、browserslist、overrides、package.json jest 字段）；新增 vite@5.4 + @vitejs/plugin-react，`build.outDir` 保持 `build/`（wrangler 部署配置不动）；`public/index.html` 迁至根目录（`%PUBLIC_URL%/` → `/`），入口 `src/index.js` → `src/index.jsx`（⚠ 不能叫 `main.jsx`：macOS 大小写不敏感文件系统上会遮蔽 `Main.tsx`）；`npm run build` = `tsc --noEmit && vite build` | ✅ |
+| 测试迁移 | jest 27 → vitest 2.1（vite.config.ts `test` 字段：jsdom + globals + setupFiles）；`@testing-library/jest-dom` v5 → v6（`/vitest` 入口）；64 个测试文件 codemod：`jest.*` → `vi.*`、`jest.Mock` 类型 → vitest `Mock`、`jest.requireActual` → `await vi.importActual`（工厂改 async）；`setupTests.ts` 增加 `configure({ asyncUtilTimeout: 3000 })`（仅放宽等待上限，不改断言）与 crypto.subtle 兜底（jsdom 的 crypto 无 subtle） | ✅ **64 套件 / 754 用例全绿** |
+| 环境垫片 | vitest jsdom 默认 URL 是 `:3000`，用 `environmentOptions.jsdom.url` 对齐 CRA 的 `http://localhost/`（直链拼接断言依赖 origin）；undici `Request` 拒绝 TRACE 等保留方法、`Response.redirect()` headers immutable（workerd 允许），webdavProtocol.test 用 defineProperty/redirect 垫片对齐 workerd 语义 | ✅ |
+| 覆盖率 | istanbul → v8 provider，阈值按「实测-0.5」重设棘轮（global 84.05/83.51/80.96/84.05、src 96.31/88.46/85.33/96.31、functions 65.27/75.6/72.22/65.27；实测 global 84.55/84.01/81.46/84.55、src 96.81/88.96/85.83/96.81、functions 65.77/76.10/72.72/65.77）；注意 text 报告目录行只聚合该层直属文件，分组总量以 coverage-final.json 汇总为准）；CI 新增 `npm run test:coverage` 阈值步骤 | ✅ |
+| MUI v7 | @mui/material、@mui/icons-material ^5.15 → ^7.3（emotion 11 不动）；FileGrid 旧 Grid API → `<Grid size={{ xs, sm, md, lg }}>`；Typography `textAlign` system prop → `sx`；Switch 的 `inputProps` v7 已不透传 → `slotProps.input`，且 input 显式 `role="switch"`（原隐式 checkbox），相关测试查询同步更新 | ✅ |
+| e2e 陈旧断言修正 | 「dir share HEAD 200 zip」是 8150589 改 HEAD 语义（默认落地页 text/html）前的残留，在基线 2ad064f 上用 CRA 产物复跑同样失败（170/171）；按 TESTING.md 已记载的现行语义改为「默认 text/html + ?download=1 为 zip」，并把 ?download=1 的 HEAD 单独断言（171 → 172 条） | ✅ **172 断言全过** |
+| 体积对比 | build JS 总量：CRA 766,362 B raw / 231,577 B gzip → Vite+MUI7 731,560 B raw / 229,938 B gzip（raw -4.5%、gzip -0.7%） | ✅ |

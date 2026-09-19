@@ -1,0 +1,152 @@
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+export interface Credentials {
+  username: string;
+  password: string;
+}
+
+const STORAGE_KEY = "flaredrive.auth";
+
+// 相对路径 API 请求的基址:Web 端保持空串(请求同源相对路径),
+// 扩展网盘视图指向实例地址(chrome-extension 页面没有同源后端)。
+let apiBase = "";
+
+export function setApiBase(base: string) {
+  apiBase = (base || "").replace(/\/+$/, "");
+}
+
+let current: Credentials | null = load();
+const listeners = new Set<() => void>();
+
+function load(): Credentials | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Credentials) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persist(credentials: Credentials | null) {
+  try {
+    if (credentials) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function emit() {
+  for (const listener of listeners) listener();
+}
+
+export function getCredentials() {
+  return current;
+}
+
+export function setCredentials(credentials: Credentials) {
+  current = credentials;
+  persist(credentials);
+  emit();
+}
+
+export function clearCredentials() {
+  current = null;
+  persist(null);
+  emit();
+}
+
+export function utf8ToBase64(value: string): string {  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function basicAuthHeader() {
+  if (!current) return undefined;
+  return `Basic ${utf8ToBase64(`${current.username}:${current.password}`)}`;
+}
+
+export async function authFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {}
+) {
+  const resolved =
+    apiBase && typeof input === "string" && input.startsWith("/")
+      ? apiBase + input
+      : input;
+  const headers = new Headers(init.headers || {});
+  const authorization = basicAuthHeader();
+  if (authorization) headers.set("Authorization", authorization);
+  // Lets /webdav keep serving the file manager when the WebDAV mount switch is off.
+  headers.set("X-Davflare-UI", "1");
+
+  const response = await fetch(resolved, { ...init, headers });
+  if (response.status === 401) clearCredentials();
+  return response;
+}
+
+export function subscribeAuth(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+interface AuthContextValue {
+  username: string | null;
+  login: (credentials: Credentials) => void;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextValue>({
+  username: null,
+  login: () => {},
+  logout: () => {},
+});
+
+export function useAuth() {
+  return useContext(AuthContext);
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [username, setUsername] = useState<string | null>(
+    current?.username ?? null
+  );
+
+  useEffect(
+    () =>
+      subscribeAuth(() => {
+        setUsername(current?.username ?? null);
+      }),
+    []
+  );
+
+  const login = useCallback((credentials: Credentials) => {
+    setCredentials(credentials);
+  }, []);
+
+  const logout = useCallback(() => {
+    clearCredentials();
+  }, []);
+
+  const value = useMemo(
+    () => ({ username, login, logout }),
+    [username, login, logout]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}

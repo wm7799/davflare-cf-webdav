@@ -1,0 +1,48 @@
+# Static sites (v1)
+
+Serve folders from R2 as public websites on a **separate hostname**. Same Worker as the drive; routing is by `Host`. Never serve site HTML on the drive origin — uploaded pages could read `localStorage` login state.
+
+## Enable
+
+1. Bind a custom domain to the same Cloudflare Pages project: `sites.<your-domain>`.
+2. In the Cloudflare dashboard, add the Pages project env var `SITES_HOST=sites.<your-domain>` (Production and/or Preview; exact hostname, no `https://`). Do **not** hard-code it in `wrangler.toml`'s `[vars]`.
+3. Redeploy. If `SITES_HOST` is empty, static hosting stays off.
+
+> `SITES_HOST` must be a hostname you do **not** use to open the drive. If you point it at the drive's own domain, site content shadows every GET/HEAD on that host and takes the manager offline.
+
+The drive host (`*.pages.dev` or your app domain) is unchanged. `/api`, `/mcp`, and `/webdav` are not exposed on the sites host.
+
+On this host, `/i/{id}` (image host) is matched **first**, then slug static sites. The image-host and sites feature switches are independent: sites off still serves `/i/{id}` when image host is on; image host off 404s `/i/*` even if sites is on. Image blobs are stored at `_$flaredrive$/img/{id}`, not under `sites/`.
+
+## Publish
+
+Upload a folder to `sites/{slug}/` (web file manager **Publish as site**, Sites zip deploy, Open API, MCP `mkdir` + `upload`, MCP `publish_site` from a drive folder, or `davflare sites publish ./dist --slug <slug>` / davflare-cli cp/sync). `{slug}` is `[a-z0-9][a-z0-9-]{0,62}`.
+
+```
+sites/blog/index.html
+sites/blog/style.css
+```
+
+Then open `https://sites.<your-domain>/blog/` (or `/blog/style.css`). Missing files 404. Directory URLs resolve to `index.html`. No git deploy, no Pages project per site.
+
+## Management API & UI
+
+- Web UI: in the file manager, select a folder → **Publish as site** (`POST /api/sites` with `source`, same semantics as MCP `publish_site`); **Sites** section (`#/sites`) — list/stats, zip deploy, SPA toggle, delete. "Manage files" opens `sites/<slug>/`.
+- MCP: `sites_list`, `sites_config`, `sites_delete` (same `/api/sites` handlers). `publish_site` copies a drive folder onto `sites/{slug}/` (overwrite same names; SPA config is kept).
+- `GET /api/sites` — list sites (`?stats=1` adds cached object count / total size). Session (Basic) or API key.
+- `POST /api/sites` — `{"slug":"blog","source":"my-folder"}` publishes a drive folder to `sites/{slug}/` (overwrite same names; SPA config kept; 404 if Sites switch is off); or `{"slug":"blog","spa":true}` toggles SPA fallback (site must already exist).
+- `DELETE /api/sites?slug=blog` — remove all site files (config kept, so a redeploy keeps the SPA flag); add `&purge=1` to also delete the config.
+- SPA fallback: on a final miss, `spa=true` serves `sites/<slug>/index.html` with 200; otherwise a custom `sites/<slug>/404.html` is served with status 404 when present.
+
+## Security
+
+- `SITES_HOST` must differ from the drive's own hostname (see the warning above): when they match, the sites middleware intercepts all GET/HEAD requests on that host.
+- Different origin from the file manager: site JS cannot read drive credentials.
+- All slugs share the sites origin (`sites.domain/a/` and `/b/`). Fine for one owner; do not host untrusted third-party HTML on the same sites host.
+- Do not put API keys in the uploaded HTML.
+
+## Image host UI
+
+Upload images in the drive UI (`#/images`): drag/drop, copy the public URL or Markdown `![](url)`, list and delete. Blobs live at `_$flaredrive$/img/{id}` with an unguessable id (not the original filename). Public URL is only `https://<SITES_HOST>/i/{id}` (no scheme in `SITES_HOST`). SVG is served as a download (`Content-Disposition: attachment` + `nosniff`), never as a navigable document.
+
+On the sites host, `/i/{id}` is matched **before** slug static sites. The image-host switch is independent of the sites switch: sites off + image host on → slugs 404 but `/i/{id}` works; image host off → `/i/*` 404 even if sites is on. If `SITES_HOST` is unset, the switch can still exist but the UI tells you to bind the host first.
