@@ -20,4 +20,4 @@ WEBDAV_PUBLIC_READ = "0"
 
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "cf-webdav-000"
+bucket_name = "cf-webdav"
